@@ -1,6 +1,8 @@
-// Package autopilot watches card balances via webhook events and triggers
-// vault-to-card refills within a user-approved policy (threshold, target,
-// asset), executed through pre-signed batches or VultiServer co-signing.
+// Package autopilot watches card balances via webhook events and owns the
+// refill trigger: low-balance detection, notification, and (later) handing
+// the trigger to the plugin system that executes auto-top-ups within a
+// user-granted policy. It never signs anything.
 //
-// Refill destinations are locked to the vault's own card deposit address.
+// Refill destinations are locked to the vault's own card deposit address,
+// whether the transaction is user-signed or plugin-executed.
 package autopilot

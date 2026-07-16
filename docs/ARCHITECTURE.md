@@ -28,8 +28,8 @@ Devices are stateless readers keyed by `vault_pubkey` (stable across devices and
 2. **Vault binding** — app MPC-signs the issuer's auth message with both vault keys (EVM secp256k1 + SVM ed25519); backend creates the account with those signers and caches the per-chain deposit addresses. *Signers are the cardholder's future withdrawal co-signing keys — see Invariants.*
 3. **Funding** — app performs a normal vault send (MPC-signed) to the account's own deposit address; backend routes chain/asset choice and tracks the deposit webhooks (only APPROVED deposits are spendable). Production chains: Base, Polygon, Solana.
 4. **Spend** — issuer authorizes (balance + policies + platform limits). Backend consumes the two transaction webhooks into the ledger (event-keyed, idempotent, out-of-order safe; partial clearings, over-clearings, and standalone refunds are normal, not errors).
-5. **Rewards & tiers** — backend computes tier (stake/spend), compiles it into issuer spend policies, accrues cashback on cleared net amounts, and manages the VULT vesting/claim ledger. The issuer has no rewards primitives.
-6. **Autopilot** — backend watches balance events and broadcasts the next pre-signed (or VultiServer co-signed) refill, capped by the user's policy, destination-locked to the card's own deposit address.
+5. **Rewards & tiers** — backend computes tier from VULT **holdings** (on-chain balances of the vault's own addresses — no staking or locking) and monthly spend, compiles it into issuer spend policies, accrues cashback on cleared net amounts, and manages the VULT vesting/claim ledger. The issuer has no rewards primitives.
+6. **Top-up & Autopilot** — a top-up is an ordinary vault send through the standard keysign flow, destination pre-filled with the card's own deposit address. The backend owns the low-balance trigger (it alone sees balance events) and notifies; automated top-ups arrive later via the plugin system, which executes within a user-granted policy — the backend still supplies only vault-derived destinations.
 7. **Security surfaces** — 3DS challenge relayed as an in-app approval (respond within the issuer window); wallet-tokenization OTP relayed by push; PAN reveal brokered as a single-use short-TTL issuer URL rendered in an app WebView.
 8. **Withdraw (planned issuer capability)** — designed as 2-of-2: issuer signature + cardholder signer signature, computed on balance net of holds. Backend will orchestrate initiate → co-sign (vault MPC ceremony) → track; it holds no signing power.
 
@@ -41,7 +41,7 @@ Devices are stateless readers keyed by `vault_pubkey` (stable across devices and
 4. **Webhook ingestion is idempotent and order-independent.** Dedupe on event id; signature verification with constant-time comparison and timestamp tolerance; consumers must tolerate replays and gaps.
 5. **The backend never computes spendable balance.** It caches issuer balance facts and displays them; authorization headroom is issuer-owned.
 6. **Rewards accrue only on cleared, net amounts** — reversals and refunds (including standalone refunds with no parent transaction) claw back accrual.
-7. **Money-affecting actions require the vault, not the backend.** The backend can initiate and orchestrate, but every fund movement is signed by the user's MPC vault (or bounded by a pre-signed policy the user approved).
+7. **Money-affecting actions require the vault, not the backend.** The backend can initiate and orchestrate, but every fund movement is signed by the user's MPC vault (or, later, executed by the plugin system within a policy the user explicitly granted).
 8. **Boundary changes require step-up.** New device, card re-bind, autopilot source change: fresh MPC threshold signature, never just a bearer token.
 
 ## Data model (sketch — schema lands with the first implementation PR)
