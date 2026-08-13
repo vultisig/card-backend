@@ -15,9 +15,11 @@ CREATE TABLE IF NOT EXISTS cards (
 	vault_public_key_ecdsa TEXT NOT NULL,
 	card_tier TEXT NOT NULL,
 	initiate_date TIMESTAMPTZ NOT NULL DEFAULT now(),
-	is_active BOOLEAN NOT NULL DEFAULT true
+	is_active BOOLEAN NOT NULL DEFAULT true,
+	nonce BIGINT NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS cards_vault_public_key_ecdsa_idx ON cards (vault_public_key_ecdsa);
+ALTER TABLE cards ADD COLUMN IF NOT EXISTS nonce BIGINT NOT NULL DEFAULT 0;
 
 CREATE TABLE IF NOT EXISTS vault_tokens (
 	id TEXT PRIMARY KEY,
