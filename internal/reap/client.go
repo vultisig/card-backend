@@ -5,9 +5,7 @@ package reap
 import (
 	"bytes"
 	"context"
-	"crypto/rand"
 	"encoding/json"
-	"fmt"
 	"io"
 	"net/http"
 	"net/url"
@@ -118,15 +116,13 @@ type CreateAccountRequest struct {
 	Signers *Signers `json:"signers,omitempty"`
 }
 
-// CreateAccount calls POST /accounts/. It returns REAP's raw JSON response
-// body and status code as-is (including non-2xx error bodies) so callers can
-// pass them straight through to their own client.
-func (c *Client) CreateAccount(ctx context.Context, req CreateAccountRequest) (status int, body []byte, err error) {
+// CreateAccount calls POST /accounts/, forwarding idempotencyKey as the
+// Idempotency-Key header verbatim (REAP requires it; generating it is the
+// caller's responsibility, not this client's). It returns REAP's raw JSON
+// response body and status code as-is (including non-2xx error bodies) so
+// callers can pass them straight through to their own client.
+func (c *Client) CreateAccount(ctx context.Context, req CreateAccountRequest, idempotencyKey string) (status int, body []byte, err error) {
 	b, err := json.Marshal(req)
-	if err != nil {
-		return 0, nil, err
-	}
-	idempotencyKey, err := newIdempotencyKey()
 	if err != nil {
 		return 0, nil, err
 	}
@@ -172,16 +168,6 @@ func (c *Client) ListAccounts(ctx context.Context, ownerID string, limit int, cu
 		q.Set("cursor", cursor)
 	}
 	return c.do(ctx, http.MethodGet, "/accounts/?"+q.Encode(), nil)
-}
-
-func newIdempotencyKey() (string, error) {
-	b := make([]byte, 16)
-	if _, err := rand.Read(b); err != nil {
-		return "", err
-	}
-	b[6] = (b[6] & 0x0f) | 0x40 // version 4
-	b[8] = (b[8] & 0x3f) | 0x80 // variant 10
-	return fmt.Sprintf("%x-%x-%x-%x-%x", b[0:4], b[4:6], b[6:8], b[8:10], b[10:16]), nil
 }
 
 func (c *Client) do(ctx context.Context, method, path string, body io.Reader, opts ...func(*http.Request)) (int, []byte, error) {

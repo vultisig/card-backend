@@ -17,14 +17,15 @@ func NewAccountService(pool *pgxpool.Pool, reapClient *reap.Client) *AccountServ
 	return &AccountService{pool: pool, reap: reapClient}
 }
 
-// CreateAccount creates a REAP account owned by publicKey's REAP user. It
-// returns ErrNoReapUser if publicKey has no REAP user ID recorded yet.
-func (s *AccountService) CreateAccount(ctx context.Context, publicKey string, signers *reap.Signers) (status int, body []byte, err error) {
+// CreateAccount creates a REAP account owned by publicKey's REAP user,
+// forwarding idempotencyKey to REAP as-is. It returns ErrNoReapUser if
+// publicKey has no REAP user ID recorded yet.
+func (s *AccountService) CreateAccount(ctx context.Context, publicKey string, signers *reap.Signers, idempotencyKey string) (status int, body []byte, err error) {
 	reapUserID, err := resolveReapUserID(ctx, s.pool, publicKey)
 	if err != nil {
 		return 0, nil, err
 	}
-	return s.reap.CreateAccount(ctx, reap.CreateAccountRequest{OwnerID: reapUserID, Signers: signers})
+	return s.reap.CreateAccount(ctx, reap.CreateAccountRequest{OwnerID: reapUserID, Signers: signers}, idempotencyKey)
 }
 
 func (s *AccountService) GenerateSignerMessage(ctx context.Context) (status int, body []byte, err error) {

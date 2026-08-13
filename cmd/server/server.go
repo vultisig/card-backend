@@ -214,6 +214,11 @@ func (s *Server) updateUserPhone(c echo.Context) error {
 func (s *Server) createAccount(c echo.Context) error {
 	claims := c.Get("claims").(*service.Claims)
 
+	idempotencyKey := c.Request().Header.Get("Idempotency-Key")
+	if idempotencyKey == "" {
+		return c.JSON(http.StatusBadRequest, echo.Map{"error": "Idempotency-Key header is required"})
+	}
+
 	var req struct {
 		Signers *reap.Signers `json:"signers"`
 	}
@@ -221,7 +226,7 @@ func (s *Server) createAccount(c echo.Context) error {
 		return c.JSON(http.StatusBadRequest, echo.Map{"error": "invalid request"})
 	}
 
-	status, body, err := s.accountService.CreateAccount(c.Request().Context(), claims.PublicKey, req.Signers)
+	status, body, err := s.accountService.CreateAccount(c.Request().Context(), claims.PublicKey, req.Signers, idempotencyKey)
 	switch {
 	case errors.Is(err, service.ErrNoReapUser):
 		return c.JSON(http.StatusNotFound, echo.Map{"error": "no reap user for this vault"})

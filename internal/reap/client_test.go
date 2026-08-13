@@ -73,8 +73,8 @@ func TestClientAccounts(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case r.Method == http.MethodPost && r.URL.Path == "/accounts/":
-			if got := r.Header.Get("Idempotency-Key"); got == "" {
-				t.Error("Idempotency-Key header missing")
+			if got := r.Header.Get("Idempotency-Key"); got != "test-idempotency-key" {
+				t.Errorf("Idempotency-Key = %q, want test-idempotency-key", got)
 			}
 			w.WriteHeader(http.StatusCreated)
 			_, _ = w.Write([]byte(`{"id":"acc-1"}`))
@@ -111,7 +111,7 @@ func TestClientAccounts(t *testing.T) {
 
 	c := &Client{baseURL: srv.URL, apiKey: "test-key", http: srv.Client()}
 
-	status, body, err := c.CreateAccount(context.Background(), CreateAccountRequest{OwnerID: "user-1"})
+	status, body, err := c.CreateAccount(context.Background(), CreateAccountRequest{OwnerID: "user-1"}, "test-idempotency-key")
 	if err != nil {
 		t.Fatal(err)
 	}
