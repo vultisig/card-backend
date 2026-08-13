@@ -34,7 +34,8 @@ func main() {
 	authService := service.NewAuthService(cfg.JWTSecret, pool)
 	reapClient := reap.NewClient(cfg.ReapEnv, cfg.ReapAPIKey)
 	userService := service.NewUserService(pool, reapClient)
-	srv := NewServer(pool, authService, userService)
+	accountService := service.NewAccountService(pool, reapClient)
+	srv := NewServer(pool, authService, userService, accountService)
 
 	log.Printf("card-backend starting on port %s", cfg.Port)
 	log.Fatal(srv.Start(":" + cfg.Port))

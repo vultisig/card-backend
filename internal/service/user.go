@@ -109,7 +109,14 @@ func (s *UserService) UpdatePhoneNumber(ctx context.Context, publicKey, phoneNum
 }
 
 func (s *UserService) reapUserID(ctx context.Context, publicKey string) (string, error) {
-	reapUserID, err := reapmapping.GetReapUserID(ctx, s.pool, publicKey)
+	return resolveReapUserID(ctx, s.pool, publicKey)
+}
+
+// resolveReapUserID looks up publicKey's REAP user ID, returning
+// ErrNoReapUser if it has none recorded yet. Shared by UserService and
+// AccountService.
+func resolveReapUserID(ctx context.Context, pool *pgxpool.Pool, publicKey string) (string, error) {
+	reapUserID, err := reapmapping.GetReapUserID(ctx, pool, publicKey)
 	if err != nil {
 		return "", err
 	}
