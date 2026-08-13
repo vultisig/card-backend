@@ -8,4 +8,5 @@ type Card struct {
 	CardTier            string    `json:"card_tier"`
 	InitiateDate        time.Time `json:"initiate_date"`
 	IsActive            bool      `json:"is_active"`
+	Nonce               int64     `json:"nonce"`
 }

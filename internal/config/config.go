@@ -10,6 +10,7 @@ import (
 type Config struct {
 	Port        string
 	DatabaseURL string
+	JWTSecret   string
 }
 
 func Load() Config {
@@ -29,5 +30,6 @@ func Load() Config {
 	return Config{
 		Port:        viper.GetString("port"),
 		DatabaseURL: viper.GetString("database_url"),
+		JWTSecret:   viper.GetString("jwt_secret"),
 	}
 }
