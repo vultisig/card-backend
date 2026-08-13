@@ -6,6 +6,7 @@ import (
 
 	"github.com/vultisig/card-backend/internal/config"
 	"github.com/vultisig/card-backend/internal/db"
+	"github.com/vultisig/card-backend/internal/reap"
 	"github.com/vultisig/card-backend/internal/service"
 )
 
@@ -13,6 +14,9 @@ func main() {
 	cfg := config.Load()
 	if cfg.JWTSecret == "" {
 		log.Fatal("config: JWT_SECRET is required")
+	}
+	if cfg.ReapAPIKey == "" {
+		log.Fatal("config: REAP_API_KEY is required")
 	}
 
 	ctx := context.Background()
@@ -28,7 +32,9 @@ func main() {
 	}
 
 	authService := service.NewAuthService(cfg.JWTSecret, pool)
-	srv := NewServer(pool, authService)
+	reapClient := reap.NewClient(cfg.ReapEnv, cfg.ReapAPIKey)
+	userService := service.NewUserService(pool, reapClient)
+	srv := NewServer(pool, authService, userService)
 
 	log.Printf("card-backend starting on port %s", cfg.Port)
 	log.Fatal(srv.Start(":" + cfg.Port))

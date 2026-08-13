@@ -9,6 +9,7 @@ import (
 	"github.com/labstack/echo/v4"
 	"github.com/labstack/echo/v4/middleware"
 
+	"github.com/vultisig/card-backend/internal/reap"
 	"github.com/vultisig/card-backend/internal/reapmapping"
 	"github.com/vultisig/card-backend/internal/service"
 )
@@ -17,13 +18,15 @@ type Server struct {
 	echo        *echo.Echo
 	pool        *pgxpool.Pool
 	authService *service.AuthService
+	userService *service.UserService
 }
 
-func NewServer(pool *pgxpool.Pool, authService *service.AuthService) *Server {
+func NewServer(pool *pgxpool.Pool, authService *service.AuthService, userService *service.UserService) *Server {
 	s := &Server{
 		echo:        echo.New(),
 		pool:        pool,
 		authService: authService,
+		userService: userService,
 	}
 
 	s.echo.Use(middleware.Recover())
@@ -44,6 +47,12 @@ func NewServer(pool *pgxpool.Pool, authService *service.AuthService) *Server {
 	s.echo.GET("/health", s.health)
 	s.echo.GET("/nonce", s.nonce)
 	s.echo.POST("/auth", s.auth)
+
+	userGroup := s.echo.Group("/user", s.authService.RequireAuth)
+	userGroup.POST("", s.createUser)
+	userGroup.GET("", s.getUser)
+	userGroup.PUT("/email", s.updateUserEmail)
+	userGroup.PUT("/phone", s.updateUserPhone)
 
 	return s
 }
@@ -92,5 +101,101 @@ func (s *Server) auth(c echo.Context) error {
 	default:
 		log.Printf("auth: %v", err)
 		return c.JSON(http.StatusInternalServerError, echo.Map{"error": "internal error"})
+	}
+}
+
+func (s *Server) createUser(c echo.Context) error {
+	claims := c.Get("claims").(*service.Claims)
+
+	var req struct {
+		Email                  string `json:"email"`
+		PhoneNumber            string `json:"phoneNumber"`
+		FirstName              string `json:"firstName"`
+		LastName               string `json:"lastName"`
+		TermsAcceptanceVersion string `json:"termsAcceptanceVersion"`
+	}
+	if err := c.Bind(&req); err != nil || req.Email == "" || req.PhoneNumber == "" || req.TermsAcceptanceVersion == "" {
+		return c.JSON(http.StatusBadRequest, echo.Map{"error": "invalid request"})
+	}
+
+	createReq := reap.CreateUserRequest{
+		Email:       req.Email,
+		PhoneNumber: req.PhoneNumber,
+		FirstName:   req.FirstName,
+		LastName:    req.LastName,
+		TermsAcceptance: reap.TermsAcceptance{
+			Version:   req.TermsAcceptanceVersion,
+			IPAddress: c.RealIP(),
+		},
+	}
+
+	status, body, err := s.userService.CreateUser(c.Request().Context(), claims.PublicKey, createReq)
+	switch {
+	case errors.Is(err, service.ErrReapUserExists):
+		return c.JSON(http.StatusConflict, echo.Map{"error": "reap user already exists"})
+	case err != nil:
+		log.Printf("createUser: %v", err)
+		return c.JSON(http.StatusInternalServerError, echo.Map{"error": "internal error"})
+	default:
+		return c.Blob(status, echo.MIMEApplicationJSON, body)
+	}
+}
+
+func (s *Server) getUser(c echo.Context) error {
+	claims := c.Get("claims").(*service.Claims)
+
+	status, body, err := s.userService.GetUser(c.Request().Context(), claims.PublicKey)
+	switch {
+	case errors.Is(err, service.ErrNoReapUser):
+		return c.JSON(http.StatusNotFound, echo.Map{"error": "no reap user for this vault"})
+	case err != nil:
+		log.Printf("getUser: %v", err)
+		return c.JSON(http.StatusInternalServerError, echo.Map{"error": "internal error"})
+	default:
+		return c.Blob(status, echo.MIMEApplicationJSON, body)
+	}
+}
+
+func (s *Server) updateUserEmail(c echo.Context) error {
+	claims := c.Get("claims").(*service.Claims)
+
+	var req struct {
+		Email string `json:"email"`
+	}
+	if err := c.Bind(&req); err != nil || req.Email == "" {
+		return c.JSON(http.StatusBadRequest, echo.Map{"error": "invalid request"})
+	}
+
+	status, body, err := s.userService.UpdateEmail(c.Request().Context(), claims.PublicKey, req.Email)
+	switch {
+	case errors.Is(err, service.ErrNoReapUser):
+		return c.JSON(http.StatusNotFound, echo.Map{"error": "no reap user for this vault"})
+	case err != nil:
+		log.Printf("updateUserEmail: %v", err)
+		return c.JSON(http.StatusInternalServerError, echo.Map{"error": "internal error"})
+	default:
+		return c.Blob(status, echo.MIMEApplicationJSON, body)
+	}
+}
+
+func (s *Server) updateUserPhone(c echo.Context) error {
+	claims := c.Get("claims").(*service.Claims)
+
+	var req struct {
+		PhoneNumber string `json:"phoneNumber"`
+	}
+	if err := c.Bind(&req); err != nil || req.PhoneNumber == "" {
+		return c.JSON(http.StatusBadRequest, echo.Map{"error": "invalid request"})
+	}
+
+	status, body, err := s.userService.UpdatePhoneNumber(c.Request().Context(), claims.PublicKey, req.PhoneNumber)
+	switch {
+	case errors.Is(err, service.ErrNoReapUser):
+		return c.JSON(http.StatusNotFound, echo.Map{"error": "no reap user for this vault"})
+	case err != nil:
+		log.Printf("updateUserPhone: %v", err)
+		return c.JSON(http.StatusInternalServerError, echo.Map{"error": "internal error"})
+	default:
+		return c.Blob(status, echo.MIMEApplicationJSON, body)
 	}
 }
