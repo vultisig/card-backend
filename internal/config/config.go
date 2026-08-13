@@ -8,11 +8,13 @@ import (
 )
 
 type Config struct {
-	Port string
+	Port        string
+	DatabaseURL string
 }
 
 func Load() Config {
 	viper.SetDefault("port", "8080")
+	viper.SetDefault("database_url", "postgres://postgres:postgres@localhost:5432/card_backend?sslmode=disable")
 	viper.AutomaticEnv()
 
 	viper.SetConfigName("config")
@@ -24,5 +26,8 @@ func Load() Config {
 		}
 	}
 
-	return Config{Port: viper.GetString("port")}
+	return Config{
+		Port:        viper.GetString("port"),
+		DatabaseURL: viper.GetString("database_url"),
+	}
 }
