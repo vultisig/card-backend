@@ -15,20 +15,18 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/labstack/echo/v4"
 
-	"github.com/vultisig/card-backend/internal/card"
+	"github.com/vultisig/card-backend/internal/reapmapping"
 )
 
 const accessTokenDuration = 24 * time.Hour
 
 var (
-	ErrCardNotActive    = errors.New("card not active")
 	ErrInvalidSignature = errors.New("invalid signature")
 	ErrNonceUsed        = errors.New("nonce already used")
 )
 
 type Claims struct {
 	jwt.RegisteredClaims
-	CardID    string `json:"card_id"`
 	PublicKey string `json:"public_key"`
 }
 
@@ -42,18 +40,17 @@ func NewAuthService(jwtSecret string, pool *pgxpool.Pool) *AuthService {
 }
 
 // Authenticate verifies that signature is a valid secp256k1 signature (DER,
-// hex-encoded) over nonce, made by the vault key registered for publicKey,
-// and that nonce is the card's next expected nonce (replay protection).
-// On success it issues a JWT access token and advances the card's nonce.
+// hex-encoded) over nonce, made by the vault key publicKey, and that nonce
+// is publicKey's next expected nonce per its VultisigReapMapping row
+// (replay protection; a vault with no row yet has an implicit nonce of 0).
+// On success it issues a JWT access token and advances the nonce, creating
+// the mapping row on first use.
 func (a *AuthService) Authenticate(ctx context.Context, publicKey string, nonce int64, signatureHex string) (string, error) {
-	c, err := card.GetByPublicKey(ctx, a.pool, publicKey)
+	currentNonce, err := reapmapping.GetNonce(ctx, a.pool, publicKey)
 	if err != nil {
 		return "", err
 	}
-	if !c.IsActive {
-		return "", ErrCardNotActive
-	}
-	if nonce != c.Nonce {
+	if nonce != currentNonce {
 		return "", ErrNonceUsed
 	}
 
@@ -61,7 +58,7 @@ func (a *AuthService) Authenticate(ctx context.Context, publicKey string, nonce 
 		return "", ErrInvalidSignature
 	}
 
-	claimed, err := card.ClaimNonce(ctx, a.pool, c.CardID, nonce)
+	claimed, err := reapmapping.ClaimNonce(ctx, a.pool, publicKey, nonce)
 	if err != nil {
 		return "", err
 	}
@@ -75,8 +72,7 @@ func (a *AuthService) Authenticate(ctx context.Context, publicKey string, nonce 
 			IssuedAt:  jwt.NewNumericDate(now),
 			ExpiresAt: jwt.NewNumericDate(now.Add(accessTokenDuration)),
 		},
-		CardID:    c.CardID,
-		PublicKey: c.VaultPublicKeyECDSA,
+		PublicKey: publicKey,
 	}
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
 	return token.SignedString(a.jwtSecret)
@@ -107,7 +103,7 @@ func verifySignature(publicKey string, nonce int64, signatureHex string) bool {
 
 func (a *AuthService) ValidateToken(tokenStr string) (*Claims, error) {
 	claims := &Claims{}
-	token, err := jwt.ParseWithClaims(tokenStr, claims, func(t *jwt.Token) (interface{}, error) {
+	token, err := jwt.ParseWithClaims(tokenStr, claims, func(t *jwt.Token) (any, error) {
 		if _, ok := t.Method.(*jwt.SigningMethodHMAC); !ok {
 			return nil, errors.New("unexpected signing method")
 		}

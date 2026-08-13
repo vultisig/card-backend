@@ -39,7 +39,7 @@ func TestVerifySignature(t *testing.T) {
 func TestValidateToken(t *testing.T) {
 	a := &AuthService{jwtSecret: []byte("test-secret")}
 
-	claims := &Claims{CardID: "card-1", PublicKey: "pk"}
+	claims := &Claims{PublicKey: "pk"}
 	token, err := jwt.NewWithClaims(jwt.SigningMethodHS256, claims).SignedString(a.jwtSecret)
 	if err != nil {
 		t.Fatal(err)
@@ -49,8 +49,8 @@ func TestValidateToken(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.CardID != "card-1" {
-		t.Fatalf("expected card-1, got %s", got.CardID)
+	if got.PublicKey != "pk" {
+		t.Fatalf("expected pk, got %s", got.PublicKey)
 	}
 
 	if _, err := a.ValidateToken(token + "tampered"); err == nil {

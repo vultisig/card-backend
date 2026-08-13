@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project status
 
-This is the Vultisig Card backend service. It currently has a minimal Echo HTTP server with config loading, standard middleware, a Postgres connection pool, and a `cards` table/model, but no routes beyond `/health` and no CRUD/business logic yet.
+This is the Vultisig Card backend service. It has a minimal Echo HTTP server with config loading, standard middleware, a Postgres connection pool, `vault_tokens` and `vultisig_reap_mappings` tables/models, a `/health` route, and a nonce-based `/auth` route that issues JWTs.
 
 ## Commands
 
@@ -25,8 +25,10 @@ golangci-lint must be built with a Go toolchain >= the version in `go.mod`, or i
 - `cmd/server/main.go` — entrypoint. Loads config, connects to Postgres (fatal on failure), builds the Echo instance with middleware (`Recover`, `RequestLogger`, `RequestID`, `CORS`, `Secure`, `Gzip`), registers routes, starts listening on `cfg.Port`. `/health` pings the DB pool.
 - `internal/config/config.go` — config loading via viper. Reads `PORT` and `DATABASE_URL` from env (defaults: `8080`, and a local `postgres://postgres:postgres@localhost:5432/card_backend?sslmode=disable`) and optionally merges a `config.json` in the working directory if present; env always takes precedence via `viper.AutomaticEnv()`.
 - `internal/db/db.go` — Postgres connection pool via `pgxpool` (jackc/pgx v5). `Connect` opens the pool and pings it before returning.
-- `internal/db/migrate.go` — `Migrate` runs idempotent `CREATE TABLE IF NOT EXISTS` DDL for the `cards` table at startup (raw SQL, not a migration framework — see the `ponytail:` comment there for when to switch to golang-migrate).
-- `internal/card/card.go` — `Card` model (`CardID`, `VaultPublicKeyECDSA`, `CardTier`, `InitiateDate`, `IsActive`), mirrors the `cards` table. `card_id` is the primary key; `vault_public_key_ecdsa` is indexed for lookups by vault.
+- `internal/db/migrate.go` — `Migrate` runs idempotent `CREATE TABLE IF NOT EXISTS` DDL for the `vault_tokens` and `vultisig_reap_mappings` tables at startup (raw SQL, not a migration framework — see the `ponytail:` comment there for when to switch to golang-migrate).
+- `internal/models/` — DB-backed model structs, one file per table (plain structs with `json` tags only, no ORM tags — the project uses raw SQL via pgxpool, not gorm). New DB models always go here.
+- `internal/reapmapping/store.go` — Postgres-backed store for `vultisig_reap_mappings` (`models.VultisigReapMapping`). `GetNonce` returns a vault's next expected nonce (0 if no row exists yet); `ClaimNonce` atomically advances it and creates the row on first use.
+- `internal/service/auth.go` — `AuthService.Authenticate` backs `POST /auth`: verifies a secp256k1 signature over the client-supplied nonce, checks it against `reapmapping.GetNonce`, claims it via `reapmapping.ClaimNonce` (replay protection), and issues a JWT keyed on the vault's public key.
 
 ## CI
 
