@@ -43,6 +43,17 @@ proxy to REAP for the vault's mapped REAP user:
 - `GET /user` — fetches the vault's REAP user. 404 if none exists yet.
 - `PUT /user/email` — `{email}`.
 - `PUT /user/phone` — `{phoneNumber}`.
+- `POST /account` — requires an `Idempotency-Key` header (client-generated,
+  forwarded to REAP as-is); `{signers?}`; creates a REAP account owned by the
+  vault's REAP user. 404 if the vault has no REAP user yet.
+- `GET /account?limit=&cursor=` — lists the vault's REAP accounts
+  (`ownerId` filtered to the vault's REAP user). 404 if the vault has no REAP
+  user yet.
+- `GET /account/signer-message` — generates a message for the client to sign
+  when providing `signers` to `POST /account`.
+- `GET /account/:id` — fetches a REAP account.
+- `GET /account/:id/balance` — fetches a REAP account's balance.
+- `GET /account/:id/assets` — fetches a REAP account's assets.
 
 ## Commands
 

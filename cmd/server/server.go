@@ -4,6 +4,7 @@ import (
 	"errors"
 	"log"
 	"net/http"
+	"strconv"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/labstack/echo/v4"
@@ -15,18 +16,20 @@ import (
 )
 
 type Server struct {
-	echo        *echo.Echo
-	pool        *pgxpool.Pool
-	authService *service.AuthService
-	userService *service.UserService
+	echo           *echo.Echo
+	pool           *pgxpool.Pool
+	authService    *service.AuthService
+	userService    *service.UserService
+	accountService *service.AccountService
 }
 
-func NewServer(pool *pgxpool.Pool, authService *service.AuthService, userService *service.UserService) *Server {
+func NewServer(pool *pgxpool.Pool, authService *service.AuthService, userService *service.UserService, accountService *service.AccountService) *Server {
 	s := &Server{
-		echo:        echo.New(),
-		pool:        pool,
-		authService: authService,
-		userService: userService,
+		echo:           echo.New(),
+		pool:           pool,
+		authService:    authService,
+		userService:    userService,
+		accountService: accountService,
 	}
 
 	s.echo.Use(middleware.Recover())
@@ -53,6 +56,14 @@ func NewServer(pool *pgxpool.Pool, authService *service.AuthService, userService
 	userGroup.GET("", s.getUser)
 	userGroup.PUT("/email", s.updateUserEmail)
 	userGroup.PUT("/phone", s.updateUserPhone)
+
+	accountGroup := s.echo.Group("/account", s.authService.RequireAuth)
+	accountGroup.POST("", s.createAccount)
+	accountGroup.GET("", s.listAccounts)
+	accountGroup.GET("/signer-message", s.generateSignerMessage)
+	accountGroup.GET("/:id", s.getAccount)
+	accountGroup.GET("/:id/balance", s.getAccountBalance)
+	accountGroup.GET("/:id/assets", s.getAccountAssets)
 
 	return s
 }
@@ -198,4 +209,84 @@ func (s *Server) updateUserPhone(c echo.Context) error {
 	default:
 		return c.Blob(status, echo.MIMEApplicationJSON, body)
 	}
+}
+
+func (s *Server) createAccount(c echo.Context) error {
+	claims := c.Get("claims").(*service.Claims)
+
+	idempotencyKey := c.Request().Header.Get("Idempotency-Key")
+	if idempotencyKey == "" {
+		return c.JSON(http.StatusBadRequest, echo.Map{"error": "Idempotency-Key header is required"})
+	}
+
+	var req struct {
+		Signers *reap.Signers `json:"signers"`
+	}
+	if err := c.Bind(&req); err != nil {
+		return c.JSON(http.StatusBadRequest, echo.Map{"error": "invalid request"})
+	}
+
+	status, body, err := s.accountService.CreateAccount(c.Request().Context(), claims.PublicKey, req.Signers, idempotencyKey)
+	switch {
+	case errors.Is(err, service.ErrNoReapUser):
+		return c.JSON(http.StatusNotFound, echo.Map{"error": "no reap user for this vault"})
+	case err != nil:
+		log.Printf("createAccount: %v", err)
+		return c.JSON(http.StatusInternalServerError, echo.Map{"error": "internal error"})
+	default:
+		return c.Blob(status, echo.MIMEApplicationJSON, body)
+	}
+}
+
+func (s *Server) listAccounts(c echo.Context) error {
+	claims := c.Get("claims").(*service.Claims)
+
+	limit, _ := strconv.Atoi(c.QueryParam("limit"))
+
+	status, body, err := s.accountService.ListAccounts(c.Request().Context(), claims.PublicKey, limit, c.QueryParam("cursor"))
+	switch {
+	case errors.Is(err, service.ErrNoReapUser):
+		return c.JSON(http.StatusNotFound, echo.Map{"error": "no reap user for this vault"})
+	case err != nil:
+		log.Printf("listAccounts: %v", err)
+		return c.JSON(http.StatusInternalServerError, echo.Map{"error": "internal error"})
+	default:
+		return c.Blob(status, echo.MIMEApplicationJSON, body)
+	}
+}
+
+func (s *Server) generateSignerMessage(c echo.Context) error {
+	status, body, err := s.accountService.GenerateSignerMessage(c.Request().Context())
+	if err != nil {
+		log.Printf("generateSignerMessage: %v", err)
+		return c.JSON(http.StatusInternalServerError, echo.Map{"error": "internal error"})
+	}
+	return c.Blob(status, echo.MIMEApplicationJSON, body)
+}
+
+func (s *Server) getAccount(c echo.Context) error {
+	status, body, err := s.accountService.GetAccount(c.Request().Context(), c.Param("id"))
+	if err != nil {
+		log.Printf("getAccount: %v", err)
+		return c.JSON(http.StatusInternalServerError, echo.Map{"error": "internal error"})
+	}
+	return c.Blob(status, echo.MIMEApplicationJSON, body)
+}
+
+func (s *Server) getAccountBalance(c echo.Context) error {
+	status, body, err := s.accountService.GetAccountBalance(c.Request().Context(), c.Param("id"))
+	if err != nil {
+		log.Printf("getAccountBalance: %v", err)
+		return c.JSON(http.StatusInternalServerError, echo.Map{"error": "internal error"})
+	}
+	return c.Blob(status, echo.MIMEApplicationJSON, body)
+}
+
+func (s *Server) getAccountAssets(c echo.Context) error {
+	status, body, err := s.accountService.GetAccountAssets(c.Request().Context(), c.Param("id"))
+	if err != nil {
+		log.Printf("getAccountAssets: %v", err)
+		return c.JSON(http.StatusInternalServerError, echo.Map{"error": "internal error"})
+	}
+	return c.Blob(status, echo.MIMEApplicationJSON, body)
 }

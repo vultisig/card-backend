@@ -8,6 +8,8 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"net/url"
+	"strconv"
 	"time"
 )
 
@@ -96,7 +98,79 @@ func (c *Client) UpdatePhoneNumber(ctx context.Context, id, phoneNumber string) 
 	return c.do(ctx, http.MethodPut, "/users/"+id+"/phone", bytes.NewReader(b))
 }
 
-func (c *Client) do(ctx context.Context, method, path string, body io.Reader) (int, []byte, error) {
+// Signer is a client-signed authorization to act on behalf of an account
+// owner, as returned by signing the message from GenerateSignerMessage.
+type Signer struct {
+	Address   string `json:"address"`
+	Message   string `json:"message"`
+	Signature string `json:"signature"`
+}
+
+type Signers struct {
+	EVM *Signer `json:"evm,omitempty"`
+	SVM *Signer `json:"svm,omitempty"`
+}
+
+type CreateAccountRequest struct {
+	OwnerID string   `json:"ownerId"`
+	Signers *Signers `json:"signers,omitempty"`
+}
+
+// CreateAccount calls POST /accounts/, forwarding idempotencyKey as the
+// Idempotency-Key header verbatim (REAP requires it; generating it is the
+// caller's responsibility, not this client's). It returns REAP's raw JSON
+// response body and status code as-is (including non-2xx error bodies) so
+// callers can pass them straight through to their own client.
+func (c *Client) CreateAccount(ctx context.Context, req CreateAccountRequest, idempotencyKey string) (status int, body []byte, err error) {
+	b, err := json.Marshal(req)
+	if err != nil {
+		return 0, nil, err
+	}
+	return c.do(ctx, http.MethodPost, "/accounts/", bytes.NewReader(b), func(req *http.Request) {
+		req.Header.Set("Idempotency-Key", idempotencyKey)
+	})
+}
+
+// GenerateSignerMessage calls GET /accounts/auth-message. It returns REAP's
+// raw JSON response body and status code as-is.
+func (c *Client) GenerateSignerMessage(ctx context.Context) (status int, body []byte, err error) {
+	return c.do(ctx, http.MethodGet, "/accounts/auth-message", nil)
+}
+
+// GetAccount calls GET /accounts/{id}. It returns REAP's raw JSON response
+// body and status code as-is (including non-2xx error bodies) so callers can
+// pass them straight through to their own client.
+func (c *Client) GetAccount(ctx context.Context, id string) (status int, body []byte, err error) {
+	return c.do(ctx, http.MethodGet, "/accounts/"+id, nil)
+}
+
+// GetAccountBalance calls GET /accounts/{id}/balance. It returns REAP's raw
+// JSON response body and status code as-is.
+func (c *Client) GetAccountBalance(ctx context.Context, id string) (status int, body []byte, err error) {
+	return c.do(ctx, http.MethodGet, "/accounts/"+id+"/balance", nil)
+}
+
+// GetAccountAssets calls GET /accounts/{id}/assets. It returns REAP's raw
+// JSON response body and status code as-is.
+func (c *Client) GetAccountAssets(ctx context.Context, id string) (status int, body []byte, err error) {
+	return c.do(ctx, http.MethodGet, "/accounts/"+id+"/assets", nil)
+}
+
+// ListAccounts calls GET /accounts/, filtered to ownerID. limit <= 0 and an
+// empty cursor are omitted, letting REAP apply its own defaults. It returns
+// REAP's raw JSON response body and status code as-is.
+func (c *Client) ListAccounts(ctx context.Context, ownerID string, limit int, cursor string) (status int, body []byte, err error) {
+	q := url.Values{"ownerId": {ownerID}}
+	if limit > 0 {
+		q.Set("limit", strconv.Itoa(limit))
+	}
+	if cursor != "" {
+		q.Set("cursor", cursor)
+	}
+	return c.do(ctx, http.MethodGet, "/accounts/?"+q.Encode(), nil)
+}
+
+func (c *Client) do(ctx context.Context, method, path string, body io.Reader, opts ...func(*http.Request)) (int, []byte, error) {
 	req, err := http.NewRequestWithContext(ctx, method, c.baseURL+path, body)
 	if err != nil {
 		return 0, nil, err
@@ -105,6 +179,9 @@ func (c *Client) do(ctx context.Context, method, path string, body io.Reader) (i
 	req.Header.Set("Reap-Version", apiVersion)
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
+	}
+	for _, opt := range opts {
+		opt(req)
 	}
 
 	resp, err := c.http.Do(req)
