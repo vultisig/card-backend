@@ -31,8 +31,22 @@ func NewUserService(pool *pgxpool.Pool, reapClient *reap.Client) *UserService {
 //
 // On a non-2xx REAP response, it returns REAP's status/body unchanged (no
 // error) so the caller can pass REAP's error straight through.
+//
+// The existence check, REAP call, and mapping write all happen while
+// holding a Postgres advisory lock on publicKey, so two concurrent requests
+// for the same vault can't both pass the check and each create a REAP user.
 func (s *UserService) CreateUser(ctx context.Context, publicKey string, req reap.CreateUserRequest) (status int, body []byte, err error) {
-	existing, err := reapmapping.GetReapUserID(ctx, s.pool, publicKey)
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return 0, nil, err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtext($1))`, publicKey); err != nil {
+		return 0, nil, err
+	}
+
+	existing, err := reapmapping.GetReapUserID(ctx, tx, publicKey)
 	if err != nil {
 		return 0, nil, err
 	}
@@ -54,7 +68,10 @@ func (s *UserService) CreateUser(ctx context.Context, publicKey string, req reap
 	if err := json.Unmarshal(body, &created); err != nil || created.ID == "" {
 		return 0, nil, errors.New("reap: create user response missing id")
 	}
-	if _, err := reapmapping.SetReapUserID(ctx, s.pool, publicKey, created.ID); err != nil {
+	if _, err := reapmapping.SetReapUserID(ctx, tx, publicKey, created.ID); err != nil {
+		return 0, nil, err
+	}
+	if err := tx.Commit(ctx); err != nil {
 		return 0, nil, err
 	}
 	return status, body, nil

@@ -5,14 +5,22 @@ import (
 	"errors"
 
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/jackc/pgx/v5/pgconn"
 )
+
+// Querier is satisfied by both *pgxpool.Pool and pgx.Tx, so callers can run
+// these queries either directly against the pool or inside a transaction
+// (e.g. to hold an advisory lock across them).
+type Querier interface {
+	Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error)
+	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
+}
 
 // GetNonce returns the next expected nonce for publicKey. A vault with no
 // mapping row yet has an implicit nonce of 0.
-func GetNonce(ctx context.Context, pool *pgxpool.Pool, publicKey string) (int64, error) {
+func GetNonce(ctx context.Context, db Querier, publicKey string) (int64, error) {
 	var nonce int64
-	err := pool.QueryRow(ctx, `
+	err := db.QueryRow(ctx, `
 		SELECT nonce FROM vultisig_reap_mappings WHERE public_key_ecdsa = $1
 	`, publicKey).Scan(&nonce)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -23,9 +31,9 @@ func GetNonce(ctx context.Context, pool *pgxpool.Pool, publicKey string) (int64,
 
 // GetReapUserID returns publicKey's REAP user ID, or "" if no mapping row
 // exists yet or none has been set.
-func GetReapUserID(ctx context.Context, pool *pgxpool.Pool, publicKey string) (string, error) {
+func GetReapUserID(ctx context.Context, db Querier, publicKey string) (string, error) {
 	var reapUserID *string
-	err := pool.QueryRow(ctx, `
+	err := db.QueryRow(ctx, `
 		SELECT reap_user_id FROM vultisig_reap_mappings WHERE public_key_ecdsa = $1
 	`, publicKey).Scan(&reapUserID)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -43,8 +51,8 @@ func GetReapUserID(ctx context.Context, pool *pgxpool.Pool, publicKey string) (s
 // SetReapUserID sets publicKey's REAP user ID, creating the mapping row on
 // first use. It only sets the value if one isn't already set, returning
 // false if publicKey already had a REAP user ID.
-func SetReapUserID(ctx context.Context, pool *pgxpool.Pool, publicKey, reapUserID string) (bool, error) {
-	tag, err := pool.Exec(ctx, `
+func SetReapUserID(ctx context.Context, db Querier, publicKey, reapUserID string) (bool, error) {
+	tag, err := db.Exec(ctx, `
 		INSERT INTO vultisig_reap_mappings (public_key_ecdsa, reap_user_id, updated_at, last_used_at)
 		VALUES ($1, $2, now(), now())
 		ON CONFLICT (public_key_ecdsa) DO UPDATE
@@ -61,8 +69,8 @@ func SetReapUserID(ctx context.Context, pool *pgxpool.Pool, publicKey, reapUserI
 // expected+1, creating the mapping row on first use, so the same signed
 // nonce can never be replayed. Returns false if the nonce didn't match
 // (already used, or wrong value).
-func ClaimNonce(ctx context.Context, pool *pgxpool.Pool, publicKey string, expected int64) (bool, error) {
-	tag, err := pool.Exec(ctx, `
+func ClaimNonce(ctx context.Context, db Querier, publicKey string, expected int64) (bool, error) {
+	tag, err := db.Exec(ctx, `
 		INSERT INTO vultisig_reap_mappings (public_key_ecdsa, nonce, updated_at, last_used_at)
 		VALUES ($1, $2 + 1, now(), now())
 		ON CONFLICT (public_key_ecdsa) DO UPDATE
