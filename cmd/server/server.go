@@ -9,7 +9,7 @@ import (
 	"github.com/labstack/echo/v4"
 	"github.com/labstack/echo/v4/middleware"
 
-	"github.com/vultisig/card-backend/internal/card"
+	"github.com/vultisig/card-backend/internal/reapmapping"
 	"github.com/vultisig/card-backend/internal/service"
 )
 
@@ -42,6 +42,7 @@ func NewServer(pool *pgxpool.Pool, authService *service.AuthService) *Server {
 	s.echo.Use(middleware.Gzip())
 
 	s.echo.GET("/health", s.health)
+	s.echo.GET("/nonce", s.nonce)
 	s.echo.POST("/auth", s.auth)
 
 	return s
@@ -58,6 +59,20 @@ func (s *Server) health(c echo.Context) error {
 	return c.String(http.StatusOK, "ok")
 }
 
+func (s *Server) nonce(c echo.Context) error {
+	publicKey := c.QueryParam("public_key")
+	if publicKey == "" {
+		return c.JSON(http.StatusBadRequest, echo.Map{"error": "invalid request"})
+	}
+
+	nonce, err := reapmapping.GetNonce(c.Request().Context(), s.pool, publicKey)
+	if err != nil {
+		log.Printf("nonce: %v", err)
+		return c.JSON(http.StatusInternalServerError, echo.Map{"error": "internal error"})
+	}
+	return c.JSON(http.StatusOK, echo.Map{"nonce": nonce})
+}
+
 func (s *Server) auth(c echo.Context) error {
 	var req struct {
 		PublicKey string `json:"public_key"`
@@ -72,10 +87,6 @@ func (s *Server) auth(c echo.Context) error {
 	switch {
 	case err == nil:
 		return c.JSON(http.StatusOK, echo.Map{"access_token": token, "token_type": "Bearer"})
-	case errors.Is(err, card.ErrNotFound):
-		return c.JSON(http.StatusNotFound, echo.Map{"error": "card not found"})
-	case errors.Is(err, service.ErrCardNotActive):
-		return c.JSON(http.StatusForbidden, echo.Map{"error": "card not active"})
 	case errors.Is(err, service.ErrInvalidSignature), errors.Is(err, service.ErrNonceUsed):
 		return c.JSON(http.StatusUnauthorized, echo.Map{"error": "invalid signature or nonce"})
 	default:
