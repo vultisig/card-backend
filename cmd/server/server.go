@@ -51,6 +51,8 @@ func NewServer(pool *pgxpool.Pool, authService *service.AuthService, userService
 	userGroup := s.echo.Group("/user", s.authService.RequireAuth)
 	userGroup.POST("", s.createUser)
 	userGroup.GET("", s.getUser)
+	userGroup.PUT("/email", s.updateUserEmail)
+	userGroup.PUT("/phone", s.updateUserPhone)
 
 	return s
 }
@@ -148,6 +150,50 @@ func (s *Server) getUser(c echo.Context) error {
 		return c.JSON(http.StatusNotFound, echo.Map{"error": "no reap user for this vault"})
 	case err != nil:
 		log.Printf("getUser: %v", err)
+		return c.JSON(http.StatusInternalServerError, echo.Map{"error": "internal error"})
+	default:
+		return c.Blob(status, echo.MIMEApplicationJSON, body)
+	}
+}
+
+func (s *Server) updateUserEmail(c echo.Context) error {
+	claims := c.Get("claims").(*service.Claims)
+
+	var req struct {
+		Email string `json:"email"`
+	}
+	if err := c.Bind(&req); err != nil || req.Email == "" {
+		return c.JSON(http.StatusBadRequest, echo.Map{"error": "invalid request"})
+	}
+
+	status, body, err := s.userService.UpdateEmail(c.Request().Context(), claims.PublicKey, req.Email)
+	switch {
+	case errors.Is(err, service.ErrNoReapUser):
+		return c.JSON(http.StatusNotFound, echo.Map{"error": "no reap user for this vault"})
+	case err != nil:
+		log.Printf("updateUserEmail: %v", err)
+		return c.JSON(http.StatusInternalServerError, echo.Map{"error": "internal error"})
+	default:
+		return c.Blob(status, echo.MIMEApplicationJSON, body)
+	}
+}
+
+func (s *Server) updateUserPhone(c echo.Context) error {
+	claims := c.Get("claims").(*service.Claims)
+
+	var req struct {
+		PhoneNumber string `json:"phoneNumber"`
+	}
+	if err := c.Bind(&req); err != nil || req.PhoneNumber == "" {
+		return c.JSON(http.StatusBadRequest, echo.Map{"error": "invalid request"})
+	}
+
+	status, body, err := s.userService.UpdatePhoneNumber(c.Request().Context(), claims.PublicKey, req.PhoneNumber)
+	switch {
+	case errors.Is(err, service.ErrNoReapUser):
+		return c.JSON(http.StatusNotFound, echo.Map{"error": "no reap user for this vault"})
+	case err != nil:
+		log.Printf("updateUserPhone: %v", err)
 		return c.JSON(http.StatusInternalServerError, echo.Map{"error": "internal error"})
 	default:
 		return c.Blob(status, echo.MIMEApplicationJSON, body)

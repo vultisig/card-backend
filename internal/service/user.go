@@ -63,12 +63,41 @@ func (s *UserService) CreateUser(ctx context.Context, publicKey string, req reap
 // GetUser fetches the REAP user for publicKey. It returns ErrNoReapUser if
 // publicKey has no REAP user ID recorded yet.
 func (s *UserService) GetUser(ctx context.Context, publicKey string) (status int, body []byte, err error) {
-	reapUserID, err := reapmapping.GetReapUserID(ctx, s.pool, publicKey)
+	reapUserID, err := s.reapUserID(ctx, publicKey)
 	if err != nil {
 		return 0, nil, err
 	}
-	if reapUserID == "" {
-		return 0, nil, ErrNoReapUser
-	}
 	return s.reap.GetUser(ctx, reapUserID)
+}
+
+// UpdateEmail updates the email of the REAP user for publicKey. It returns
+// ErrNoReapUser if publicKey has no REAP user ID recorded yet.
+func (s *UserService) UpdateEmail(ctx context.Context, publicKey, email string) (status int, body []byte, err error) {
+	reapUserID, err := s.reapUserID(ctx, publicKey)
+	if err != nil {
+		return 0, nil, err
+	}
+	return s.reap.UpdateEmail(ctx, reapUserID, email)
+}
+
+// UpdatePhoneNumber updates the phone number of the REAP user for
+// publicKey. It returns ErrNoReapUser if publicKey has no REAP user ID
+// recorded yet.
+func (s *UserService) UpdatePhoneNumber(ctx context.Context, publicKey, phoneNumber string) (status int, body []byte, err error) {
+	reapUserID, err := s.reapUserID(ctx, publicKey)
+	if err != nil {
+		return 0, nil, err
+	}
+	return s.reap.UpdatePhoneNumber(ctx, reapUserID, phoneNumber)
+}
+
+func (s *UserService) reapUserID(ctx context.Context, publicKey string) (string, error) {
+	reapUserID, err := reapmapping.GetReapUserID(ctx, s.pool, publicKey)
+	if err != nil {
+		return "", err
+	}
+	if reapUserID == "" {
+		return "", ErrNoReapUser
+	}
+	return reapUserID, nil
 }

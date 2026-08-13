@@ -69,6 +69,30 @@ func (c *Client) GetUser(ctx context.Context, id string) (status int, body []byt
 	return c.do(ctx, http.MethodGet, "/users/"+id, nil)
 }
 
+// UpdateEmail calls PUT /users/{id}/email. On success REAP returns 204 with
+// an empty body; on error it returns REAP's raw JSON error body as-is.
+func (c *Client) UpdateEmail(ctx context.Context, id, email string) (status int, body []byte, err error) {
+	b, err := json.Marshal(struct {
+		Email string `json:"email"`
+	}{email})
+	if err != nil {
+		return 0, nil, err
+	}
+	return c.do(ctx, http.MethodPut, "/users/"+id+"/email", bytes.NewReader(b))
+}
+
+// UpdatePhoneNumber calls PUT /users/{id}/phone. On success REAP returns 204
+// with an empty body; on error it returns REAP's raw JSON error body as-is.
+func (c *Client) UpdatePhoneNumber(ctx context.Context, id, phoneNumber string) (status int, body []byte, err error) {
+	b, err := json.Marshal(struct {
+		PhoneNumber string `json:"phoneNumber"`
+	}{phoneNumber})
+	if err != nil {
+		return 0, nil, err
+	}
+	return c.do(ctx, http.MethodPut, "/users/"+id+"/phone", bytes.NewReader(b))
+}
+
 func (c *Client) do(ctx context.Context, method, path string, body io.Reader) (int, []byte, error) {
 	req, err := http.NewRequestWithContext(ctx, method, c.baseURL+path, body)
 	if err != nil {

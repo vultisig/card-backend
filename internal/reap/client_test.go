@@ -23,6 +23,10 @@ func TestClientCreateAndGetUser(t *testing.T) {
 		case r.Method == http.MethodGet && r.URL.Path == "/users/user-1":
 			w.WriteHeader(http.StatusOK)
 			_, _ = w.Write([]byte(`{"id":"user-1","email":"a@b.com"}`))
+		case r.Method == http.MethodPut && r.URL.Path == "/users/user-1/email":
+			w.WriteHeader(http.StatusNoContent)
+		case r.Method == http.MethodPut && r.URL.Path == "/users/user-1/phone":
+			w.WriteHeader(http.StatusNoContent)
 		default:
 			t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
 			w.WriteHeader(http.StatusNotFound)
@@ -46,6 +50,22 @@ func TestClientCreateAndGetUser(t *testing.T) {
 	}
 	if status != http.StatusOK || string(body) != `{"id":"user-1","email":"a@b.com"}` {
 		t.Fatalf("GetUser = %d %s", status, body)
+	}
+
+	status, body, err = c.UpdateEmail(context.Background(), "user-1", "new@b.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status != http.StatusNoContent || len(body) != 0 {
+		t.Fatalf("UpdateEmail = %d %s", status, body)
+	}
+
+	status, body, err = c.UpdatePhoneNumber(context.Background(), "user-1", "+14155552671")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status != http.StatusNoContent || len(body) != 0 {
+		t.Fatalf("UpdatePhoneNumber = %d %s", status, body)
 	}
 }
 
