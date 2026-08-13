@@ -6,9 +6,9 @@ authenticates vaults via a signed nonce and proxies user management to the
 
 ## Setup
 
-```
+```sh
 make db-up               # starts local Postgres (card_backend db on localhost:5432, user/pass postgres)
-JWT_SECRET=dev REAP_API_KEY=<sandbox key> go run ./cmd/server
+JWT_SECRET=dev REAP_API_KEY=your-sandbox-key go run ./cmd/server
 ```
 
 The server fails fast at startup if it can't reach Postgres, or if

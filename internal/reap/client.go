@@ -8,9 +8,12 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"time"
 )
 
 const apiVersion = "2025-02-14"
+
+const requestTimeout = 10 * time.Second
 
 const (
 	EnvSandbox = "sandbox"
@@ -35,7 +38,7 @@ func NewClient(env, apiKey string) *Client {
 	if env == EnvProd {
 		baseURL = prodBaseURL
 	}
-	return &Client{baseURL: baseURL, apiKey: apiKey, http: http.DefaultClient}
+	return &Client{baseURL: baseURL, apiKey: apiKey, http: &http.Client{Timeout: requestTimeout}}
 }
 
 type TermsAcceptance struct {
