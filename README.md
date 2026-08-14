@@ -8,11 +8,11 @@ authenticates vaults via a signed nonce and proxies user management to the
 
 ```sh
 make db-up               # starts local Postgres (card_backend db on localhost:5432, user/pass postgres)
-JWT_SECRET=dev REAP_API_KEY=your-sandbox-key go run ./cmd/server
+JWT_SECRET=dev REAP_API_KEY=your-sandbox-key REAP_WEBHOOK_SECRET=your-webhook-signing-secret go run ./cmd/server
 ```
 
 The server fails fast at startup if it can't reach Postgres, or if
-`JWT_SECRET` or `REAP_API_KEY` is unset.
+`JWT_SECRET`, `REAP_API_KEY`, or `REAP_WEBHOOK_SECRET` is unset.
 
 ## Configuration
 
@@ -26,6 +26,7 @@ directory if present; env always wins):
 | `JWT_SECRET` | — | required |
 | `REAP_API_KEY` | — | required |
 | `REAP_ENV` | `sandbox` | `sandbox` or `prod` |
+| `REAP_WEBHOOK_SECRET` | — | required; the signing secret from [`POST /webhooks`](https://docs.reap.global/api-reference/webhooks/create-webhook-endpoint) |
 
 ## API
 
@@ -54,6 +55,13 @@ proxy to REAP for the vault's mapped REAP user:
 - `GET /account/:id` — fetches a REAP account.
 - `GET /account/:id/balance` — fetches a REAP account's balance.
 - `GET /account/:id/assets` — fetches a REAP account's assets.
+
+- `POST /webhooks/reap` — receives REAP's async webhook deliveries
+  (https://docs.reap.global/webhooks/overview). Verifies the
+  `X-Reap-Webhook-Signature` header against `REAP_WEBHOOK_SECRET` (no vault
+  JWT — REAP's own signature is the auth) and persists the event envelope
+  for later processing; doesn't yet act on any event type. Doesn't handle
+  REAP's separate synchronous card-authorization-request webhook.
 
 ## Commands
 

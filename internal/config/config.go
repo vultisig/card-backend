@@ -14,6 +14,10 @@ type Config struct {
 	ReapAPIKey  string
 	// ReapEnv selects the REAP API environment: "sandbox" or "prod".
 	ReapEnv string
+	// ReapWebhookSecret is the signing secret REAP issues when a webhook
+	// endpoint is registered (POST /webhooks), used to verify the
+	// X-Reap-Webhook-Signature header on incoming webhook deliveries.
+	ReapWebhookSecret string
 }
 
 func Load() Config {
@@ -32,10 +36,11 @@ func Load() Config {
 	}
 
 	return Config{
-		Port:        viper.GetString("port"),
-		DatabaseURL: viper.GetString("database_url"),
-		JWTSecret:   viper.GetString("jwt_secret"),
-		ReapAPIKey:  viper.GetString("reap_api_key"),
-		ReapEnv:     viper.GetString("reap_env"),
+		Port:              viper.GetString("port"),
+		DatabaseURL:       viper.GetString("database_url"),
+		JWTSecret:         viper.GetString("jwt_secret"),
+		ReapAPIKey:        viper.GetString("reap_api_key"),
+		ReapEnv:           viper.GetString("reap_env"),
+		ReapWebhookSecret: viper.GetString("reap_webhook_secret"),
 	}
 }

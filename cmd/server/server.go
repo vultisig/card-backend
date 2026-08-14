@@ -29,9 +29,10 @@ type Server struct {
 	activityService        *service.ActivityService
 	fraudAlertService      *service.FraudAlertService
 	simulationService      *service.SimulationService
+	webhookService         *service.WebhookService
 }
 
-func NewServer(pool *pgxpool.Pool, authService *service.AuthService, userService *service.UserService, accountService *service.AccountService, cardService *service.CardService, cardShipmentService *service.CardShipmentService, cardDesignService *service.CardDesignService, cardTransactionService *service.CardTransactionService, activityService *service.ActivityService, fraudAlertService *service.FraudAlertService, simulationService *service.SimulationService, reapEnv string) *Server {
+func NewServer(pool *pgxpool.Pool, authService *service.AuthService, userService *service.UserService, accountService *service.AccountService, cardService *service.CardService, cardShipmentService *service.CardShipmentService, cardDesignService *service.CardDesignService, cardTransactionService *service.CardTransactionService, activityService *service.ActivityService, fraudAlertService *service.FraudAlertService, simulationService *service.SimulationService, webhookService *service.WebhookService, reapEnv string) *Server {
 	s := &Server{
 		echo:                   echo.New(),
 		pool:                   pool,
@@ -45,6 +46,7 @@ func NewServer(pool *pgxpool.Pool, authService *service.AuthService, userService
 		activityService:        activityService,
 		fraudAlertService:      fraudAlertService,
 		simulationService:      simulationService,
+		webhookService:         webhookService,
 	}
 
 	s.echo.Use(middleware.Recover())
@@ -66,6 +68,7 @@ func NewServer(pool *pgxpool.Pool, authService *service.AuthService, userService
 	s.echo.GET("/health", s.health)
 	s.echo.GET("/nonce", s.nonce)
 	s.echo.POST("/auth", s.auth)
+	s.echo.POST("/webhooks/reap", s.reapWebhook)
 
 	userGroup := s.echo.Group("/user", s.authService.RequireAuth)
 	userGroup.POST("", s.createUser)
@@ -188,6 +191,31 @@ func (s *Server) auth(c echo.Context) error {
 	default:
 		log.Printf("auth: %v", err)
 		return c.JSON(http.StatusInternalServerError, echo.Map{"error": "internal error"})
+	}
+}
+
+// reapWebhook receives REAP's async webhook deliveries
+// (https://docs.reap.global/webhooks/overview). It's unauthenticated by
+// vault JWT — REAP proves the request is genuine via the HMAC-signed
+// X-Reap-Webhook-Signature header instead, verified in
+// WebhookService.HandleEvent.
+func (s *Server) reapWebhook(c echo.Context) error {
+	rawBody, err := io.ReadAll(c.Request().Body)
+	if err != nil {
+		return c.JSON(http.StatusBadRequest, echo.Map{"error": "invalid request"})
+	}
+
+	err = s.webhookService.HandleEvent(c.Request().Context(), rawBody, c.Request().Header.Get("X-Reap-Webhook-Signature"))
+	switch {
+	case errors.Is(err, service.ErrInvalidWebhookSignature):
+		return c.JSON(http.StatusBadRequest, echo.Map{"error": "invalid signature"})
+	case errors.Is(err, service.ErrInvalidWebhookPayload):
+		return c.JSON(http.StatusBadRequest, echo.Map{"error": "invalid payload"})
+	case err != nil:
+		log.Printf("reapWebhook: %v", err)
+		return c.JSON(http.StatusInternalServerError, echo.Map{"error": "internal error"})
+	default:
+		return c.NoContent(http.StatusOK)
 	}
 }
 
