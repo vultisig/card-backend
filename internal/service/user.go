@@ -108,6 +108,17 @@ func (s *UserService) UpdatePhoneNumber(ctx context.Context, publicKey, phoneNum
 	return s.reap.UpdatePhoneNumber(ctx, reapUserID, phoneNumber)
 }
 
+// AdvanceUserApplication advances the REAP KYC application for publicKey's
+// REAP user, forwarding body and idempotencyKey to REAP as-is. It returns
+// ErrNoReapUser if publicKey has no REAP user ID recorded yet.
+func (s *UserService) AdvanceUserApplication(ctx context.Context, publicKey string, body []byte, idempotencyKey string) (status int, respBody []byte, err error) {
+	reapUserID, err := s.reapUserID(ctx, publicKey)
+	if err != nil {
+		return 0, nil, err
+	}
+	return s.reap.AdvanceUserApplication(ctx, reapUserID, body, idempotencyKey)
+}
+
 func (s *UserService) reapUserID(ctx context.Context, publicKey string) (string, error) {
 	return resolveReapUserID(ctx, s.pool, publicKey)
 }
