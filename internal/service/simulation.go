@@ -95,8 +95,17 @@ func (s *SimulationService) SimulateCardStatus(ctx context.Context, publicKey, i
 	return s.reap.SimulateCardStatus(ctx, id, status)
 }
 
+// SimulateAuthorization checks req.CardID's ownership, and — since REAP
+// performs an incremental authorization on the existing transaction named
+// by req.TransactionID when set, rather than always creating a new one —
+// also checks that transaction's card ownership so a caller can't
+// incrementally authorize another vault's transaction by pairing their own
+// cardId with someone else's transactionId.
 func (s *SimulationService) SimulateAuthorization(ctx context.Context, publicKey string, req reap.SimulateCardTransactionRequest) (statusCode int, body []byte, err error) {
 	if err := s.checkCardOwnership(ctx, publicKey, req.CardID); err != nil {
+		return 0, nil, err
+	}
+	if err := s.checkTransactionOwnership(ctx, publicKey, req.TransactionID); err != nil {
 		return 0, nil, err
 	}
 	return s.reap.SimulateAuthorization(ctx, req)
@@ -109,15 +118,31 @@ func (s *SimulationService) SimulateThreeDSAuthorization(ctx context.Context, pu
 	return s.reap.SimulateThreeDSAuthorization(ctx, req)
 }
 
+// SimulateDecline checks req.CardID's ownership, and — since REAP declines
+// the specific existing transaction named by req.TransactionID when set,
+// rather than always creating a new declined transaction — also checks that
+// transaction's card ownership so a caller can't decline another vault's
+// transaction by pairing their own cardId with someone else's transactionId.
 func (s *SimulationService) SimulateDecline(ctx context.Context, publicKey string, req reap.SimulateCardTransactionRequest) (statusCode int, body []byte, err error) {
 	if err := s.checkCardOwnership(ctx, publicKey, req.CardID); err != nil {
+		return 0, nil, err
+	}
+	if err := s.checkTransactionOwnership(ctx, publicKey, req.TransactionID); err != nil {
 		return 0, nil, err
 	}
 	return s.reap.SimulateDecline(ctx, req)
 }
 
+// SimulateClearing checks req.CardID's ownership, and — since REAP clears
+// the specific existing authorization named by req.TransactionID when set,
+// rather than always creating a new one — also checks that transaction's
+// card ownership so a caller can't clear another vault's authorization by
+// pairing their own cardId with someone else's transactionId.
 func (s *SimulationService) SimulateClearing(ctx context.Context, publicKey string, req reap.SimulateCardTransactionRequest) (statusCode int, body []byte, err error) {
 	if err := s.checkCardOwnership(ctx, publicKey, req.CardID); err != nil {
+		return 0, nil, err
+	}
+	if err := s.checkTransactionOwnership(ctx, publicKey, req.TransactionID); err != nil {
 		return 0, nil, err
 	}
 	return s.reap.SimulateClearing(ctx, req)
@@ -133,8 +158,16 @@ func (s *SimulationService) SimulateReversal(ctx context.Context, publicKey stri
 	return s.reap.SimulateReversal(ctx, req)
 }
 
+// SimulateRefund checks req.CardID's ownership, and — since REAP refunds
+// the specific existing cleared transaction named by req.TransactionID when
+// set, rather than always creating an unrelated refund — also checks that
+// transaction's card ownership so a caller can't refund another vault's
+// transaction by pairing their own cardId with someone else's transactionId.
 func (s *SimulationService) SimulateRefund(ctx context.Context, publicKey string, req reap.SimulateCardTransactionRequest) (statusCode int, body []byte, err error) {
 	if err := s.checkCardOwnership(ctx, publicKey, req.CardID); err != nil {
+		return 0, nil, err
+	}
+	if err := s.checkTransactionOwnership(ctx, publicKey, req.TransactionID); err != nil {
 		return 0, nil, err
 	}
 	return s.reap.SimulateRefund(ctx, req)
