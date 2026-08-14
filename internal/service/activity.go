@@ -2,19 +2,19 @@ package service
 
 import (
 	"context"
-	"encoding/json"
+	"errors"
 	"net/url"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/vultisig/card-backend/internal/cardownership"
 	"github.com/vultisig/card-backend/internal/reap"
+	"github.com/vultisig/card-backend/internal/resourceownership"
 )
 
 // ActivityService backs GET /activities. REAP's only filters that identify
 // a specific card/account are accountId and cardId (no userId/ownerId), so
-// ListActivities requires at least one of them and checks it against the
-// calling vault before forwarding, so a vault can't list every vault's
+// ListActivities requires at least one of them and checks it against
+// resourceownership before forwarding, so a vault can't list every vault's
 // activity by omitting filters.
 type ActivityService struct {
 	pool *pgxpool.Pool
@@ -27,8 +27,9 @@ func NewActivityService(pool *pgxpool.Pool, reapClient *reap.Client) *ActivitySe
 
 // ListActivities returns ErrMissingScopeFilter if query has neither
 // accountId nor cardId set, and ErrResourceNotOwned if either is set to an
-// ID that isn't publicKey's. Any unsupported userId/ownerId filter the
-// caller passed is dropped before forwarding.
+// ID that isn't recorded as owned by publicKey's REAP user (including if
+// publicKey has no REAP user at all). Any unsupported userId/ownerId filter
+// the caller passed is dropped before forwarding.
 func (s *ActivityService) ListActivities(ctx context.Context, publicKey string, query url.Values) (status int, body []byte, err error) {
 	query.Del("userId")
 	query.Del("ownerId")
@@ -39,8 +40,16 @@ func (s *ActivityService) ListActivities(ctx context.Context, publicKey string, 
 		return 0, nil, ErrMissingScopeFilter
 	}
 
+	reapUserID, err := resolveReapUserID(ctx, s.pool, publicKey)
+	if errors.Is(err, ErrNoReapUser) {
+		return 0, nil, ErrResourceNotOwned
+	}
+	if err != nil {
+		return 0, nil, err
+	}
+
 	if cardID != "" {
-		owned, err := cardownership.IsOwner(ctx, s.pool, publicKey, cardID)
+		owned, err := resourceownership.IsOwner(ctx, s.pool, resourceownership.KindCard, cardID, reapUserID)
 		if err != nil {
 			return 0, nil, err
 		}
@@ -50,24 +59,11 @@ func (s *ActivityService) ListActivities(ctx context.Context, publicKey string, 
 	}
 
 	if accountID != "" {
-		reapUserID, err := resolveReapUserID(ctx, s.pool, publicKey)
+		owned, err := resourceownership.IsOwner(ctx, s.pool, resourceownership.KindAccount, accountID, reapUserID)
 		if err != nil {
 			return 0, nil, err
 		}
-		accStatus, accBody, err := s.reap.GetAccount(ctx, accountID)
-		if err != nil {
-			return 0, nil, err
-		}
-		if accStatus < 200 || accStatus >= 300 {
-			return accStatus, accBody, nil
-		}
-		var account struct {
-			OwnerID string `json:"ownerId"`
-		}
-		if err := json.Unmarshal(accBody, &account); err != nil {
-			return 0, nil, err
-		}
-		if account.OwnerID != reapUserID {
+		if !owned {
 			return 0, nil, ErrResourceNotOwned
 		}
 	}

@@ -32,10 +32,12 @@ CREATE TABLE IF NOT EXISTS vultisig_reap_mappings (
 	last_used_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
-CREATE TABLE IF NOT EXISTS vultisig_card_ownership (
-	card_id TEXT PRIMARY KEY,
-	vault_public_key TEXT NOT NULL,
-	created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+CREATE TABLE IF NOT EXISTS vultisig_resource_ownership (
+	resource_kind TEXT NOT NULL,
+	resource_id TEXT NOT NULL,
+	reap_user_id TEXT NOT NULL,
+	created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+	PRIMARY KEY (resource_kind, resource_id)
 );
 `
 

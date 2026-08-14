@@ -8,8 +8,8 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/vultisig/card-backend/internal/cardownership"
 	"github.com/vultisig/card-backend/internal/reap"
+	"github.com/vultisig/card-backend/internal/resourceownership"
 )
 
 type CardService struct {
@@ -23,8 +23,8 @@ func NewCardService(pool *pgxpool.Pool, reapClient *reap.Client) *CardService {
 
 // CreateCard creates a REAP card owned by publicKey's REAP user (req.UserID
 // is overwritten with it), forwarding idempotencyKey to REAP as-is, and
-// records the created card's ID as owned by publicKey so later per-card
-// actions can be scoped to the creating vault. It returns ErrNoReapUser if
+// records the created card's ID as owned by that REAP user so later
+// per-card actions can be scoped to it. It returns ErrNoReapUser if
 // publicKey has no REAP user ID recorded yet.
 func (s *CardService) CreateCard(ctx context.Context, publicKey string, req reap.CreateCardRequest, idempotencyKey string) (status int, body []byte, err error) {
 	reapUserID, err := resolveReapUserID(ctx, s.pool, publicKey)
@@ -47,7 +47,7 @@ func (s *CardService) CreateCard(ctx context.Context, publicKey string, req reap
 	if err := json.Unmarshal(body, &created); err != nil || created.ID == "" {
 		return 0, nil, errors.New("reap: create card response missing id")
 	}
-	if err := cardownership.Record(ctx, s.pool, publicKey, created.ID); err != nil {
+	if err := resourceownership.Record(ctx, s.pool, resourceownership.KindCard, created.ID, reapUserID); err != nil {
 		return 0, nil, err
 	}
 	return status, body, nil
@@ -67,9 +67,17 @@ func (s *CardService) ListCards(ctx context.Context, publicKey string, query url
 }
 
 // checkOwnership returns ErrResourceNotOwned if cardID isn't recorded as
-// owned by publicKey (including if it has no ownership record at all).
+// owned by publicKey's REAP user (including if publicKey has no REAP user,
+// or cardID has no ownership record at all).
 func (s *CardService) checkOwnership(ctx context.Context, publicKey, cardID string) error {
-	owned, err := cardownership.IsOwner(ctx, s.pool, publicKey, cardID)
+	reapUserID, err := resolveReapUserID(ctx, s.pool, publicKey)
+	if errors.Is(err, ErrNoReapUser) {
+		return ErrResourceNotOwned
+	}
+	if err != nil {
+		return err
+	}
+	owned, err := resourceownership.IsOwner(ctx, s.pool, resourceownership.KindCard, cardID, reapUserID)
 	if err != nil {
 		return err
 	}
