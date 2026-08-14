@@ -8,8 +8,9 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/vultisig/card-backend/internal/cardownership"
 	"github.com/vultisig/card-backend/internal/reap"
-	"github.com/vultisig/card-backend/internal/resourceownership"
+	"github.com/vultisig/card-backend/internal/usercardownership"
 )
 
 type CardService struct {
@@ -22,10 +23,12 @@ func NewCardService(pool *pgxpool.Pool, reapClient *reap.Client) *CardService {
 }
 
 // CreateCard creates a REAP card owned by publicKey's REAP user (req.UserID
-// is overwritten with it), forwarding idempotencyKey to REAP as-is, and
-// records the created card's ID as owned by that REAP user so later
-// per-card actions can be scoped to it. It returns ErrNoReapUser if
-// publicKey has no REAP user ID recorded yet.
+// is overwritten with it), forwarding idempotencyKey to REAP as-is. On a
+// 2xx response it records the created card's ID as owned by publicKey (via
+// cardownership, used to scope later per-card actions to the creating
+// vault) and by that REAP user (via usercardownership, mirroring REAP's own
+// userId-based ownership model). It returns ErrNoReapUser if publicKey has
+// no REAP user ID recorded yet.
 func (s *CardService) CreateCard(ctx context.Context, publicKey string, req reap.CreateCardRequest, idempotencyKey string) (status int, body []byte, err error) {
 	reapUserID, err := resolveReapUserID(ctx, s.pool, publicKey)
 	if err != nil {
@@ -47,7 +50,10 @@ func (s *CardService) CreateCard(ctx context.Context, publicKey string, req reap
 	if err := json.Unmarshal(body, &created); err != nil || created.ID == "" {
 		return 0, nil, errors.New("reap: create card response missing id")
 	}
-	if err := resourceownership.Record(ctx, s.pool, resourceownership.KindCard, created.ID, reapUserID); err != nil {
+	if err := cardownership.Record(ctx, s.pool, publicKey, created.ID); err != nil {
+		return 0, nil, err
+	}
+	if err := usercardownership.Record(ctx, s.pool, reapUserID, created.ID); err != nil {
 		return 0, nil, err
 	}
 	return status, body, nil
@@ -67,17 +73,9 @@ func (s *CardService) ListCards(ctx context.Context, publicKey string, query url
 }
 
 // checkOwnership returns ErrResourceNotOwned if cardID isn't recorded as
-// owned by publicKey's REAP user (including if publicKey has no REAP user,
-// or cardID has no ownership record at all).
+// owned by publicKey (including if it has no ownership record at all).
 func (s *CardService) checkOwnership(ctx context.Context, publicKey, cardID string) error {
-	reapUserID, err := resolveReapUserID(ctx, s.pool, publicKey)
-	if errors.Is(err, ErrNoReapUser) {
-		return ErrResourceNotOwned
-	}
-	if err != nil {
-		return err
-	}
-	owned, err := resourceownership.IsOwner(ctx, s.pool, resourceownership.KindCard, cardID, reapUserID)
+	owned, err := cardownership.IsOwner(ctx, s.pool, publicKey, cardID)
 	if err != nil {
 		return err
 	}

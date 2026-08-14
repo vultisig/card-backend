@@ -7,8 +7,8 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/vultisig/card-backend/internal/accountownership"
 	"github.com/vultisig/card-backend/internal/reap"
-	"github.com/vultisig/card-backend/internal/resourceownership"
 )
 
 type AccountService struct {
@@ -22,7 +22,7 @@ func NewAccountService(pool *pgxpool.Pool, reapClient *reap.Client) *AccountServ
 
 // CreateAccount creates a REAP account owned by publicKey's REAP user,
 // forwarding idempotencyKey to REAP as-is, and records the created
-// account's ID as owned by that REAP user (tracking only — GetAccount/
+// account's ID as owned by publicKey (tracking only — GetAccount/
 // GetAccountBalance/GetAccountAssets don't enforce it below, since REAP
 // accounts can have co-signers beyond their creator). It returns
 // ErrNoReapUser if publicKey has no REAP user ID recorded yet.
@@ -46,7 +46,7 @@ func (s *AccountService) CreateAccount(ctx context.Context, publicKey string, si
 	if err := json.Unmarshal(body, &created); err != nil || created.ID == "" {
 		return 0, nil, errors.New("reap: create account response missing id")
 	}
-	if err := resourceownership.Record(ctx, s.pool, resourceownership.KindAccount, created.ID, reapUserID); err != nil {
+	if err := accountownership.Record(ctx, s.pool, publicKey, created.ID); err != nil {
 		return 0, nil, err
 	}
 	return status, body, nil
