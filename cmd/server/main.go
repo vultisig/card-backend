@@ -18,6 +18,9 @@ func main() {
 	if cfg.ReapAPIKey == "" {
 		log.Fatal("config: REAP_API_KEY is required")
 	}
+	if cfg.ReapWebhookSecret == "" {
+		log.Fatal("config: REAP_WEBHOOK_SECRET is required")
+	}
 
 	ctx := context.Background()
 
@@ -42,7 +45,8 @@ func main() {
 	activityService := service.NewActivityService(pool, reapClient)
 	fraudAlertService := service.NewFraudAlertService(pool, reapClient)
 	simulationService := service.NewSimulationService(pool, reapClient)
-	srv := NewServer(pool, authService, userService, accountService, cardService, cardShipmentService, cardDesignService, cardTransactionService, activityService, fraudAlertService, simulationService, cfg.ReapEnv)
+	webhookService := service.NewWebhookService(pool, cfg.ReapWebhookSecret)
+	srv := NewServer(pool, authService, userService, accountService, cardService, cardShipmentService, cardDesignService, cardTransactionService, activityService, fraudAlertService, simulationService, webhookService, cfg.ReapEnv)
 
 	log.Printf("card-backend starting on port %s", cfg.Port)
 	log.Fatal(srv.Start(":" + cfg.Port))

@@ -49,6 +49,13 @@ CREATE TABLE IF NOT EXISTS vultisig_user_card_ownership (
 	reap_user_id TEXT NOT NULL,
 	created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+CREATE TABLE IF NOT EXISTS vultisig_reap_webhook_events (
+	event_id TEXT PRIMARY KEY,
+	event_type TEXT NOT NULL,
+	payload JSONB NOT NULL,
+	received_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
 `
 
 func Migrate(ctx context.Context, pool *pgxpool.Pool) error {
