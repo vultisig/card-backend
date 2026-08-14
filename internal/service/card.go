@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"log"
 	"net/url"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -48,12 +49,18 @@ func (s *CardService) CreateCard(ctx context.Context, publicKey string, req reap
 		ID string `json:"id"`
 	}
 	if err := json.Unmarshal(body, &created); err != nil || created.ID == "" {
+		// The REAP card already exists at this point but its ID couldn't be
+		// parsed out, so it can't be recorded as owned by anyone; log the
+		// raw response so it's recoverable.
+		log.Printf("card: created REAP card but failed to parse id from response: %s", body)
 		return 0, nil, errors.New("reap: create card response missing id")
 	}
 	if err := cardownership.Record(ctx, s.pool, publicKey, created.ID); err != nil {
+		log.Printf("card: created REAP card %s but failed to record cardownership: %v", created.ID, err)
 		return 0, nil, err
 	}
 	if err := usercardownership.Record(ctx, s.pool, reapUserID, created.ID); err != nil {
+		log.Printf("card: created REAP card %s but failed to record usercardownership: %v", created.ID, err)
 		return 0, nil, err
 	}
 	return status, body, nil

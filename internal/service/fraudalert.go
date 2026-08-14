@@ -95,6 +95,12 @@ func (s *FraudAlertService) ListFraudAlerts(ctx context.Context, publicKey strin
 	if err := s.checkCardOwnership(ctx, publicKey, cardID); err != nil {
 		return 0, nil, err
 	}
+	// Forward only the cardId just checked, dropping transactionId (already
+	// resolved above) and collapsing any repeated cardId values, so a
+	// caller can't sneak an extra/different value past the ownership check
+	// via a second query param occurrence.
+	query.Del("transactionId")
+	query.Set("cardId", cardID)
 	return s.reap.ListFraudAlerts(ctx, query)
 }
 

@@ -38,6 +38,15 @@ func (s *ActivityService) ListActivities(ctx context.Context, publicKey string, 
 	if accountID == "" && cardID == "" {
 		return 0, nil, ErrMissingScopeFilter
 	}
+	// Collapse any repeated accountId/cardId values to the single one just
+	// checked, so a caller can't sneak an extra value past the ownership
+	// check via a second occurrence of the query param.
+	if cardID != "" {
+		query.Set("cardId", cardID)
+	}
+	if accountID != "" {
+		query.Set("accountId", accountID)
+	}
 
 	if cardID != "" {
 		owned, err := cardownership.IsOwner(ctx, s.pool, publicKey, cardID)
