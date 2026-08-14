@@ -31,7 +31,7 @@ type Server struct {
 	simulationService      *service.SimulationService
 }
 
-func NewServer(pool *pgxpool.Pool, authService *service.AuthService, userService *service.UserService, accountService *service.AccountService, cardService *service.CardService, cardShipmentService *service.CardShipmentService, cardDesignService *service.CardDesignService, cardTransactionService *service.CardTransactionService, activityService *service.ActivityService, fraudAlertService *service.FraudAlertService, simulationService *service.SimulationService) *Server {
+func NewServer(pool *pgxpool.Pool, authService *service.AuthService, userService *service.UserService, accountService *service.AccountService, cardService *service.CardService, cardShipmentService *service.CardShipmentService, cardDesignService *service.CardDesignService, cardTransactionService *service.CardTransactionService, activityService *service.ActivityService, fraudAlertService *service.FraudAlertService, simulationService *service.SimulationService, reapEnv string) *Server {
 	s := &Server{
 		echo:                   echo.New(),
 		pool:                   pool,
@@ -61,6 +61,7 @@ func NewServer(pool *pgxpool.Pool, authService *service.AuthService, userService
 	s.echo.Use(middleware.CORS())
 	s.echo.Use(middleware.Secure())
 	s.echo.Use(middleware.Gzip())
+	s.echo.Use(middleware.BodyLimit("1M"))
 
 	s.echo.GET("/health", s.health)
 	s.echo.GET("/nonce", s.nonce)
@@ -124,17 +125,21 @@ func NewServer(pool *pgxpool.Pool, authService *service.AuthService, userService
 	fraudAlertGroup.GET("/:id", s.getFraudAlert)
 	fraudAlertGroup.POST("/:id/respond", s.respondToFraudAlert)
 
-	simulationGroup := s.echo.Group("/simulation", s.authService.RequireAuth)
-	simulationGroup.POST("/users/:id/application", s.simulateUserApplicationStatus)
-	simulationGroup.POST("/companies/:id/status", s.simulateCompanyStatus)
-	simulationGroup.POST("/accounts/:id/status", s.simulateAccountStatus)
-	simulationGroup.POST("/cards/:id/status", s.simulateCardStatus)
-	simulationGroup.POST("/card-transactions/authorization", s.simulateAuthorization)
-	simulationGroup.POST("/card-transactions/authorization-with-3ds", s.simulateThreeDSAuthorization)
-	simulationGroup.POST("/card-transactions/decline", s.simulateDecline)
-	simulationGroup.POST("/card-transactions/clearing", s.simulateClearing)
-	simulationGroup.POST("/card-transactions/reversal", s.simulateReversal)
-	simulationGroup.POST("/card-transactions/refund", s.simulateRefund)
+	// ponytail: registering the group only in sandbox is the local enforcement;
+	// REAP itself also rejects these calls outside sandbox.
+	if reapEnv == reap.EnvSandbox {
+		simulationGroup := s.echo.Group("/simulation", s.authService.RequireAuth)
+		simulationGroup.POST("/users/:id/application", s.simulateUserApplicationStatus)
+		simulationGroup.POST("/companies/:id/status", s.simulateCompanyStatus)
+		simulationGroup.POST("/accounts/:id/status", s.simulateAccountStatus)
+		simulationGroup.POST("/cards/:id/status", s.simulateCardStatus)
+		simulationGroup.POST("/card-transactions/authorization", s.simulateAuthorization)
+		simulationGroup.POST("/card-transactions/authorization-with-3ds", s.simulateThreeDSAuthorization)
+		simulationGroup.POST("/card-transactions/decline", s.simulateDecline)
+		simulationGroup.POST("/card-transactions/clearing", s.simulateClearing)
+		simulationGroup.POST("/card-transactions/reversal", s.simulateReversal)
+		simulationGroup.POST("/card-transactions/refund", s.simulateRefund)
+	}
 
 	return s
 }
@@ -291,6 +296,9 @@ func (s *Server) advanceUserApplication(c echo.Context) error {
 	}
 
 	idempotencyKey := c.Request().Header.Get("Idempotency-Key")
+	if idempotencyKey == "" {
+		return c.JSON(http.StatusBadRequest, echo.Map{"error": "Idempotency-Key header is required"})
+	}
 
 	status, respBody, err := s.userService.AdvanceUserApplication(c.Request().Context(), claims.PublicKey, body, idempotencyKey)
 	switch {
@@ -437,24 +445,35 @@ func (s *Server) listCards(c echo.Context) error {
 }
 
 func (s *Server) getCard(c echo.Context) error {
-	status, body, err := s.cardService.GetCard(c.Request().Context(), c.Param("id"))
-	if err != nil {
+	claims := c.Get("claims").(*service.Claims)
+	status, body, err := s.cardService.GetCard(c.Request().Context(), claims.PublicKey, c.Param("id"))
+	switch {
+	case errors.Is(err, service.ErrResourceNotOwned):
+		return c.JSON(http.StatusNotFound, echo.Map{"error": "not found"})
+	case err != nil:
 		log.Printf("getCard: %v", err)
 		return c.JSON(http.StatusInternalServerError, echo.Map{"error": "internal error"})
+	default:
+		return c.Blob(status, echo.MIMEApplicationJSON, body)
 	}
-	return c.Blob(status, echo.MIMEApplicationJSON, body)
 }
 
 func (s *Server) deleteCard(c echo.Context) error {
-	status, body, err := s.cardService.DeleteCard(c.Request().Context(), c.Param("id"))
-	if err != nil {
+	claims := c.Get("claims").(*service.Claims)
+	status, body, err := s.cardService.DeleteCard(c.Request().Context(), claims.PublicKey, c.Param("id"))
+	switch {
+	case errors.Is(err, service.ErrResourceNotOwned):
+		return c.JSON(http.StatusNotFound, echo.Map{"error": "not found"})
+	case err != nil:
 		log.Printf("deleteCard: %v", err)
 		return c.JSON(http.StatusInternalServerError, echo.Map{"error": "internal error"})
+	default:
+		return c.Blob(status, echo.MIMEApplicationJSON, body)
 	}
-	return c.Blob(status, echo.MIMEApplicationJSON, body)
 }
 
 func (s *Server) updateCardPin(c echo.Context) error {
+	claims := c.Get("claims").(*service.Claims)
 	var req struct {
 		Pin string `json:"pin"`
 	}
@@ -462,33 +481,48 @@ func (s *Server) updateCardPin(c echo.Context) error {
 		return c.JSON(http.StatusBadRequest, echo.Map{"error": "invalid request"})
 	}
 
-	status, body, err := s.cardService.UpdateCardPin(c.Request().Context(), c.Param("id"), req.Pin)
-	if err != nil {
+	status, body, err := s.cardService.UpdateCardPin(c.Request().Context(), claims.PublicKey, c.Param("id"), req.Pin)
+	switch {
+	case errors.Is(err, service.ErrResourceNotOwned):
+		return c.JSON(http.StatusNotFound, echo.Map{"error": "not found"})
+	case err != nil:
 		log.Printf("updateCardPin: %v", err)
 		return c.JSON(http.StatusInternalServerError, echo.Map{"error": "internal error"})
+	default:
+		return c.Blob(status, echo.MIMEApplicationJSON, body)
 	}
-	return c.Blob(status, echo.MIMEApplicationJSON, body)
 }
 
 func (s *Server) freezeCard(c echo.Context) error {
-	status, body, err := s.cardService.FreezeCard(c.Request().Context(), c.Param("id"))
-	if err != nil {
+	claims := c.Get("claims").(*service.Claims)
+	status, body, err := s.cardService.FreezeCard(c.Request().Context(), claims.PublicKey, c.Param("id"))
+	switch {
+	case errors.Is(err, service.ErrResourceNotOwned):
+		return c.JSON(http.StatusNotFound, echo.Map{"error": "not found"})
+	case err != nil:
 		log.Printf("freezeCard: %v", err)
 		return c.JSON(http.StatusInternalServerError, echo.Map{"error": "internal error"})
+	default:
+		return c.Blob(status, echo.MIMEApplicationJSON, body)
 	}
-	return c.Blob(status, echo.MIMEApplicationJSON, body)
 }
 
 func (s *Server) unfreezeCard(c echo.Context) error {
-	status, body, err := s.cardService.UnfreezeCard(c.Request().Context(), c.Param("id"))
-	if err != nil {
+	claims := c.Get("claims").(*service.Claims)
+	status, body, err := s.cardService.UnfreezeCard(c.Request().Context(), claims.PublicKey, c.Param("id"))
+	switch {
+	case errors.Is(err, service.ErrResourceNotOwned):
+		return c.JSON(http.StatusNotFound, echo.Map{"error": "not found"})
+	case err != nil:
 		log.Printf("unfreezeCard: %v", err)
 		return c.JSON(http.StatusInternalServerError, echo.Map{"error": "internal error"})
+	default:
+		return c.Blob(status, echo.MIMEApplicationJSON, body)
 	}
-	return c.Blob(status, echo.MIMEApplicationJSON, body)
 }
 
 func (s *Server) revealCardDetails(c echo.Context) error {
+	claims := c.Get("claims").(*service.Claims)
 	var req struct {
 		StylesheetURL     string `json:"stylesheetUrl"`
 		ShowCopyPanButton bool   `json:"showCopyPanButton"`
@@ -497,15 +531,20 @@ func (s *Server) revealCardDetails(c echo.Context) error {
 		return c.JSON(http.StatusBadRequest, echo.Map{"error": "invalid request"})
 	}
 
-	status, body, err := s.cardService.RevealCardDetails(c.Request().Context(), c.Param("id"), req.StylesheetURL, req.ShowCopyPanButton)
-	if err != nil {
+	status, body, err := s.cardService.RevealCardDetails(c.Request().Context(), claims.PublicKey, c.Param("id"), req.StylesheetURL, req.ShowCopyPanButton)
+	switch {
+	case errors.Is(err, service.ErrResourceNotOwned):
+		return c.JSON(http.StatusNotFound, echo.Map{"error": "not found"})
+	case err != nil:
 		log.Printf("revealCardDetails: %v", err)
 		return c.JSON(http.StatusInternalServerError, echo.Map{"error": "internal error"})
+	default:
+		return c.Blob(status, echo.MIMEApplicationJSON, body)
 	}
-	return c.Blob(status, echo.MIMEApplicationJSON, body)
 }
 
 func (s *Server) updateCard3DSChallengeMethod(c echo.Context) error {
+	claims := c.Get("claims").(*service.Claims)
 	var req struct {
 		ThreeDSChallengeMethod string `json:"3dsChallengeMethod"`
 	}
@@ -513,15 +552,20 @@ func (s *Server) updateCard3DSChallengeMethod(c echo.Context) error {
 		return c.JSON(http.StatusBadRequest, echo.Map{"error": "invalid request"})
 	}
 
-	status, body, err := s.cardService.UpdateCard3DSChallengeMethod(c.Request().Context(), c.Param("id"), req.ThreeDSChallengeMethod)
-	if err != nil {
+	status, body, err := s.cardService.UpdateCard3DSChallengeMethod(c.Request().Context(), claims.PublicKey, c.Param("id"), req.ThreeDSChallengeMethod)
+	switch {
+	case errors.Is(err, service.ErrResourceNotOwned):
+		return c.JSON(http.StatusNotFound, echo.Map{"error": "not found"})
+	case err != nil:
 		log.Printf("updateCard3DSChallengeMethod: %v", err)
 		return c.JSON(http.StatusInternalServerError, echo.Map{"error": "internal error"})
+	default:
+		return c.Blob(status, echo.MIMEApplicationJSON, body)
 	}
-	return c.Blob(status, echo.MIMEApplicationJSON, body)
 }
 
 func (s *Server) activatePhysicalCard(c echo.Context) error {
+	claims := c.Get("claims").(*service.Claims)
 	var req struct {
 		ActivationCode string `json:"activationCode"`
 	}
@@ -529,24 +573,34 @@ func (s *Server) activatePhysicalCard(c echo.Context) error {
 		return c.JSON(http.StatusBadRequest, echo.Map{"error": "invalid request"})
 	}
 
-	status, body, err := s.cardService.ActivatePhysicalCard(c.Request().Context(), c.Param("id"), req.ActivationCode)
-	if err != nil {
+	status, body, err := s.cardService.ActivatePhysicalCard(c.Request().Context(), claims.PublicKey, c.Param("id"), req.ActivationCode)
+	switch {
+	case errors.Is(err, service.ErrResourceNotOwned):
+		return c.JSON(http.StatusNotFound, echo.Map{"error": "not found"})
+	case err != nil:
 		log.Printf("activatePhysicalCard: %v", err)
 		return c.JSON(http.StatusInternalServerError, echo.Map{"error": "internal error"})
+	default:
+		return c.Blob(status, echo.MIMEApplicationJSON, body)
 	}
-	return c.Blob(status, echo.MIMEApplicationJSON, body)
 }
 
 func (s *Server) getCardActivationCode(c echo.Context) error {
-	status, body, err := s.cardService.GetCardActivationCode(c.Request().Context(), c.Param("id"))
-	if err != nil {
+	claims := c.Get("claims").(*service.Claims)
+	status, body, err := s.cardService.GetCardActivationCode(c.Request().Context(), claims.PublicKey, c.Param("id"))
+	switch {
+	case errors.Is(err, service.ErrResourceNotOwned):
+		return c.JSON(http.StatusNotFound, echo.Map{"error": "not found"})
+	case err != nil:
 		log.Printf("getCardActivationCode: %v", err)
 		return c.JSON(http.StatusInternalServerError, echo.Map{"error": "internal error"})
+	default:
+		return c.Blob(status, echo.MIMEApplicationJSON, body)
 	}
-	return c.Blob(status, echo.MIMEApplicationJSON, body)
 }
 
 func (s *Server) pushProvisionCard(c echo.Context) error {
+	claims := c.Get("claims").(*service.Claims)
 	var req struct {
 		Provider        string `json:"provider"`
 		WalletAccountID string `json:"walletAccountId"`
@@ -557,13 +611,20 @@ func (s *Server) pushProvisionCard(c echo.Context) error {
 	}
 
 	idempotencyKey := c.Request().Header.Get("Idempotency-Key")
+	if idempotencyKey == "" {
+		return c.JSON(http.StatusBadRequest, echo.Map{"error": "Idempotency-Key header is required"})
+	}
 
-	status, body, err := s.cardService.PushProvisionCard(c.Request().Context(), c.Param("id"), req.Provider, req.WalletAccountID, req.DeviceID, idempotencyKey)
-	if err != nil {
+	status, body, err := s.cardService.PushProvisionCard(c.Request().Context(), claims.PublicKey, c.Param("id"), req.Provider, req.WalletAccountID, req.DeviceID, idempotencyKey)
+	switch {
+	case errors.Is(err, service.ErrResourceNotOwned):
+		return c.JSON(http.StatusNotFound, echo.Map{"error": "not found"})
+	case err != nil:
 		log.Printf("pushProvisionCard: %v", err)
 		return c.JSON(http.StatusInternalServerError, echo.Map{"error": "internal error"})
+	default:
+		return c.Blob(status, echo.MIMEApplicationJSON, body)
 	}
-	return c.Blob(status, echo.MIMEApplicationJSON, body)
 }
 
 func (s *Server) respondToCard3DSChallenge(c echo.Context) error {
@@ -711,15 +772,23 @@ func (s *Server) getCardTransaction(c echo.Context) error {
 }
 
 func (s *Server) listActivities(c echo.Context) error {
-	status, body, err := s.activityService.ListActivities(c.Request().Context(), c.QueryParams())
-	if err != nil {
+	claims := c.Get("claims").(*service.Claims)
+	status, body, err := s.activityService.ListActivities(c.Request().Context(), claims.PublicKey, c.QueryParams())
+	switch {
+	case errors.Is(err, service.ErrMissingScopeFilter):
+		return c.JSON(http.StatusBadRequest, echo.Map{"error": "accountId or cardId filter is required"})
+	case errors.Is(err, service.ErrResourceNotOwned):
+		return c.JSON(http.StatusNotFound, echo.Map{"error": "not found"})
+	case err != nil:
 		log.Printf("listActivities: %v", err)
 		return c.JSON(http.StatusInternalServerError, echo.Map{"error": "internal error"})
+	default:
+		return c.Blob(status, echo.MIMEApplicationJSON, body)
 	}
-	return c.Blob(status, echo.MIMEApplicationJSON, body)
 }
 
 func (s *Server) reportFraud(c echo.Context) error {
+	claims := c.Get("claims").(*service.Claims)
 	var req struct {
 		TransactionID        string `json:"transactionId"`
 		Type                 string `json:"type"`
@@ -730,38 +799,58 @@ func (s *Server) reportFraud(c echo.Context) error {
 	}
 
 	idempotencyKey := c.Request().Header.Get("Idempotency-Key")
+	if idempotencyKey == "" {
+		return c.JSON(http.StatusBadRequest, echo.Map{"error": "Idempotency-Key header is required"})
+	}
 
-	status, body, err := s.fraudAlertService.ReportFraud(c.Request().Context(), reap.ReportFraudRequest{
+	status, body, err := s.fraudAlertService.ReportFraud(c.Request().Context(), claims.PublicKey, reap.ReportFraudRequest{
 		TransactionID:        req.TransactionID,
 		Type:                 req.Type,
 		CardholderNotifiedAt: req.CardholderNotifiedAt,
 	}, idempotencyKey)
-	if err != nil {
+	switch {
+	case errors.Is(err, service.ErrResourceNotOwned):
+		return c.JSON(http.StatusNotFound, echo.Map{"error": "not found"})
+	case err != nil:
 		log.Printf("reportFraud: %v", err)
 		return c.JSON(http.StatusInternalServerError, echo.Map{"error": "internal error"})
+	default:
+		return c.Blob(status, echo.MIMEApplicationJSON, body)
 	}
-	return c.Blob(status, echo.MIMEApplicationJSON, body)
 }
 
 func (s *Server) listFraudAlerts(c echo.Context) error {
-	status, body, err := s.fraudAlertService.ListFraudAlerts(c.Request().Context(), c.QueryParams())
-	if err != nil {
+	claims := c.Get("claims").(*service.Claims)
+	status, body, err := s.fraudAlertService.ListFraudAlerts(c.Request().Context(), claims.PublicKey, c.QueryParams())
+	switch {
+	case errors.Is(err, service.ErrMissingScopeFilter):
+		return c.JSON(http.StatusBadRequest, echo.Map{"error": "cardId or transactionId filter is required"})
+	case errors.Is(err, service.ErrResourceNotOwned):
+		return c.JSON(http.StatusNotFound, echo.Map{"error": "not found"})
+	case err != nil:
 		log.Printf("listFraudAlerts: %v", err)
 		return c.JSON(http.StatusInternalServerError, echo.Map{"error": "internal error"})
+	default:
+		return c.Blob(status, echo.MIMEApplicationJSON, body)
 	}
-	return c.Blob(status, echo.MIMEApplicationJSON, body)
 }
 
 func (s *Server) getFraudAlert(c echo.Context) error {
-	status, body, err := s.fraudAlertService.GetFraudAlert(c.Request().Context(), c.Param("id"))
-	if err != nil {
+	claims := c.Get("claims").(*service.Claims)
+	status, body, err := s.fraudAlertService.GetFraudAlert(c.Request().Context(), claims.PublicKey, c.Param("id"))
+	switch {
+	case errors.Is(err, service.ErrResourceNotOwned):
+		return c.JSON(http.StatusNotFound, echo.Map{"error": "not found"})
+	case err != nil:
 		log.Printf("getFraudAlert: %v", err)
 		return c.JSON(http.StatusInternalServerError, echo.Map{"error": "internal error"})
+	default:
+		return c.Blob(status, echo.MIMEApplicationJSON, body)
 	}
-	return c.Blob(status, echo.MIMEApplicationJSON, body)
 }
 
 func (s *Server) respondToFraudAlert(c echo.Context) error {
+	claims := c.Get("claims").(*service.Claims)
 	var req struct {
 		Response string `json:"response"`
 		Type     string `json:"type"`
@@ -771,16 +860,23 @@ func (s *Server) respondToFraudAlert(c echo.Context) error {
 	}
 
 	idempotencyKey := c.Request().Header.Get("Idempotency-Key")
+	if idempotencyKey == "" {
+		return c.JSON(http.StatusBadRequest, echo.Map{"error": "Idempotency-Key header is required"})
+	}
 
-	status, body, err := s.fraudAlertService.RespondToFraudAlert(c.Request().Context(), c.Param("id"), reap.RespondToFraudAlertRequest{
+	status, body, err := s.fraudAlertService.RespondToFraudAlert(c.Request().Context(), claims.PublicKey, c.Param("id"), reap.RespondToFraudAlertRequest{
 		Response: req.Response,
 		Type:     req.Type,
 	}, idempotencyKey)
-	if err != nil {
+	switch {
+	case errors.Is(err, service.ErrResourceNotOwned):
+		return c.JSON(http.StatusNotFound, echo.Map{"error": "not found"})
+	case err != nil:
 		log.Printf("respondToFraudAlert: %v", err)
 		return c.JSON(http.StatusInternalServerError, echo.Map{"error": "internal error"})
+	default:
+		return c.Blob(status, echo.MIMEApplicationJSON, body)
 	}
-	return c.Blob(status, echo.MIMEApplicationJSON, body)
 }
 
 func (s *Server) simulateUserApplicationStatus(c echo.Context) error {

@@ -31,6 +31,12 @@ CREATE TABLE IF NOT EXISTS vultisig_reap_mappings (
 	updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
 	last_used_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+CREATE TABLE IF NOT EXISTS vultisig_card_ownership (
+	card_id TEXT PRIMARY KEY,
+	vault_public_key TEXT NOT NULL,
+	created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
 `
 
 func Migrate(ctx context.Context, pool *pgxpool.Pool) error {

@@ -14,6 +14,15 @@ import (
 var (
 	ErrReapUserExists = errors.New("reap user already exists")
 	ErrNoReapUser     = errors.New("no reap user for this vault")
+	// ErrResourceNotOwned is returned when publicKey's vault requests an
+	// action on a REAP resource ID (card, fraud alert, activity filter)
+	// that's recorded as owned by a different vault.
+	ErrResourceNotOwned = errors.New("resource not owned by this vault")
+	// ErrMissingScopeFilter is returned when a list endpoint requires an
+	// ownership-checkable filter (e.g. accountId/cardId) and the caller
+	// supplied none, since forwarding the query unfiltered would return
+	// every vault's resources.
+	ErrMissingScopeFilter = errors.New("a scoping filter is required")
 )
 
 type UserService struct {

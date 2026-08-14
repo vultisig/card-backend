@@ -39,10 +39,10 @@ func main() {
 	cardShipmentService := service.NewCardShipmentService(reapClient)
 	cardDesignService := service.NewCardDesignService(reapClient)
 	cardTransactionService := service.NewCardTransactionService(reapClient)
-	activityService := service.NewActivityService(reapClient)
-	fraudAlertService := service.NewFraudAlertService(reapClient)
+	activityService := service.NewActivityService(pool, reapClient)
+	fraudAlertService := service.NewFraudAlertService(pool, reapClient)
 	simulationService := service.NewSimulationService(reapClient)
-	srv := NewServer(pool, authService, userService, accountService, cardService, cardShipmentService, cardDesignService, cardTransactionService, activityService, fraudAlertService, simulationService)
+	srv := NewServer(pool, authService, userService, accountService, cardService, cardShipmentService, cardDesignService, cardTransactionService, activityService, fraudAlertService, simulationService, cfg.ReapEnv)
 
 	log.Printf("card-backend starting on port %s", cfg.Port)
 	log.Fatal(srv.Start(":" + cfg.Port))
