@@ -12,7 +12,14 @@ import (
 	"github.com/vultisig/card-backend/internal/reapwebhookevent"
 )
 
-var ErrInvalidWebhookSignature = reap.ErrInvalidWebhookSignature
+var (
+	ErrInvalidWebhookSignature = reap.ErrInvalidWebhookSignature
+	// ErrInvalidWebhookPayload is returned when a correctly signed webhook
+	// body doesn't parse as a valid event envelope. Retrying can't fix a
+	// malformed envelope, so callers should map this to a 4xx (not 5xx) to
+	// stop REAP's automatic retries.
+	ErrInvalidWebhookPayload = errors.New("reap: webhook payload missing id/type")
+)
 
 // WebhookService backs POST /webhooks/reap, REAP's async event-delivery
 // callback (https://docs.reap.global/webhooks/overview). It only verifies
@@ -45,7 +52,7 @@ func (s *WebhookService) HandleEvent(ctx context.Context, rawBody []byte, signat
 		Type string `json:"type"`
 	}
 	if err := json.Unmarshal(rawBody, &envelope); err != nil || envelope.ID == "" || envelope.Type == "" {
-		return errors.New("reap: webhook payload missing id/type")
+		return ErrInvalidWebhookPayload
 	}
 
 	return reapwebhookevent.Record(ctx, s.pool, envelope.ID, envelope.Type, rawBody)

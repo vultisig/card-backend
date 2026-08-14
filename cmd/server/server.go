@@ -209,6 +209,8 @@ func (s *Server) reapWebhook(c echo.Context) error {
 	switch {
 	case errors.Is(err, service.ErrInvalidWebhookSignature):
 		return c.JSON(http.StatusBadRequest, echo.Map{"error": "invalid signature"})
+	case errors.Is(err, service.ErrInvalidWebhookPayload):
+		return c.JSON(http.StatusBadRequest, echo.Map{"error": "invalid payload"})
 	case err != nil:
 		log.Printf("reapWebhook: %v", err)
 		return c.JSON(http.StatusInternalServerError, echo.Map{"error": "internal error"})
