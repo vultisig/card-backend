@@ -2,9 +2,12 @@ package service
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/vultisig/card-backend/internal/accountownership"
 	"github.com/vultisig/card-backend/internal/reap"
 )
 
@@ -18,29 +21,68 @@ func NewAccountService(pool *pgxpool.Pool, reapClient *reap.Client) *AccountServ
 }
 
 // CreateAccount creates a REAP account owned by publicKey's REAP user,
-// forwarding idempotencyKey to REAP as-is. It returns ErrNoReapUser if
+// forwarding idempotencyKey to REAP as-is, and records the created
+// account's ID as owned by publicKey. It returns ErrNoReapUser if
 // publicKey has no REAP user ID recorded yet.
 func (s *AccountService) CreateAccount(ctx context.Context, publicKey string, signers *reap.Signers, idempotencyKey string) (status int, body []byte, err error) {
 	reapUserID, err := resolveReapUserID(ctx, s.pool, publicKey)
 	if err != nil {
 		return 0, nil, err
 	}
-	return s.reap.CreateAccount(ctx, reap.CreateAccountRequest{OwnerID: reapUserID, Signers: signers}, idempotencyKey)
+
+	status, body, err = s.reap.CreateAccount(ctx, reap.CreateAccountRequest{OwnerID: reapUserID, Signers: signers}, idempotencyKey)
+	if err != nil {
+		return 0, nil, err
+	}
+	if status < 200 || status >= 300 {
+		return status, body, nil
+	}
+
+	var created struct {
+		ID string `json:"id"`
+	}
+	if err := json.Unmarshal(body, &created); err != nil || created.ID == "" {
+		return 0, nil, errors.New("reap: create account response missing id")
+	}
+	if err := accountownership.Record(ctx, s.pool, publicKey, created.ID); err != nil {
+		return 0, nil, err
+	}
+	return status, body, nil
 }
 
 func (s *AccountService) GenerateSignerMessage(ctx context.Context) (status int, body []byte, err error) {
 	return s.reap.GenerateSignerMessage(ctx)
 }
 
-func (s *AccountService) GetAccount(ctx context.Context, id string) (status int, body []byte, err error) {
+func (s *AccountService) checkOwnership(ctx context.Context, publicKey, accountID string) error {
+	owned, err := accountownership.IsOwner(ctx, s.pool, publicKey, accountID)
+	if err != nil {
+		return err
+	}
+	if !owned {
+		return ErrResourceNotOwned
+	}
+	return nil
+}
+
+func (s *AccountService) GetAccount(ctx context.Context, publicKey, id string) (status int, body []byte, err error) {
+	if err := s.checkOwnership(ctx, publicKey, id); err != nil {
+		return 0, nil, err
+	}
 	return s.reap.GetAccount(ctx, id)
 }
 
-func (s *AccountService) GetAccountBalance(ctx context.Context, id string) (status int, body []byte, err error) {
+func (s *AccountService) GetAccountBalance(ctx context.Context, publicKey, id string) (status int, body []byte, err error) {
+	if err := s.checkOwnership(ctx, publicKey, id); err != nil {
+		return 0, nil, err
+	}
 	return s.reap.GetAccountBalance(ctx, id)
 }
 
-func (s *AccountService) GetAccountAssets(ctx context.Context, id string) (status int, body []byte, err error) {
+func (s *AccountService) GetAccountAssets(ctx context.Context, publicKey, id string) (status int, body []byte, err error) {
+	if err := s.checkOwnership(ctx, publicKey, id); err != nil {
+		return 0, nil, err
+	}
 	return s.reap.GetAccountAssets(ctx, id)
 }
 
