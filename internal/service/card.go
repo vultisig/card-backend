@@ -9,6 +9,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/vultisig/card-backend/internal/accountownership"
 	"github.com/vultisig/card-backend/internal/cardownership"
 	"github.com/vultisig/card-backend/internal/reap"
 	"github.com/vultisig/card-backend/internal/usercardownership"
@@ -34,6 +35,13 @@ func (s *CardService) CreateCard(ctx context.Context, publicKey string, req reap
 	reapUserID, err := resolveReapUserID(ctx, s.pool, publicKey)
 	if err != nil {
 		return 0, nil, err
+	}
+	owned, err := accountownership.IsOwner(ctx, s.pool, publicKey, req.AccountID)
+	if err != nil {
+		return 0, nil, err
+	}
+	if !owned {
+		return 0, nil, ErrResourceNotOwned
 	}
 	req.UserID = reapUserID
 
@@ -93,10 +101,7 @@ func (s *CardService) checkOwnership(ctx context.Context, publicKey, cardID stri
 }
 
 // The remaining card-ID methods verify the card is owned by publicKey (via
-// checkOwnership) before delegating to reap.Client. RespondToCard3DSChallenge
-// and GetCard3DSChallenge act on a 3DS-challenge ID rather than a card ID, a
-// separate REAP resource this package doesn't track, so they remain thin
-// passthroughs.
+// checkOwnership) before delegating to reap.Client.
 
 func (s *CardService) GetCard(ctx context.Context, publicKey, id string) (status int, body []byte, err error) {
 	if err := s.checkOwnership(ctx, publicKey, id); err != nil {
@@ -168,10 +173,41 @@ func (s *CardService) PushProvisionCard(ctx context.Context, publicKey, id, prov
 	return s.reap.PushProvisionCard(ctx, id, provider, walletAccountID, deviceID, idempotencyKey)
 }
 
-func (s *CardService) RespondToCard3DSChallenge(ctx context.Context, id string, approve bool) (status int, body []byte, err error) {
+func (s *CardService) challengeCardID(ctx context.Context, id string) (status int, body []byte, cardID string, err error) {
+	status, body, err = s.reap.GetCard3DSChallenge(ctx, id)
+	if err != nil {
+		return 0, nil, "", err
+	}
+	if status < 200 || status >= 300 {
+		return status, body, "", nil
+	}
+	var challenge struct {
+		CardID string `json:"cardId"`
+	}
+	if err := json.Unmarshal(body, &challenge); err != nil || challenge.CardID == "" {
+		return 0, nil, "", errors.New("reap: get card 3ds challenge response missing cardId")
+	}
+	return status, body, challenge.CardID, nil
+}
+
+func (s *CardService) RespondToCard3DSChallenge(ctx context.Context, publicKey, id string, approve bool) (status int, body []byte, err error) {
+	status, body, cardID, err := s.challengeCardID(ctx, id)
+	if err != nil || cardID == "" {
+		return status, body, err
+	}
+	if err := s.checkOwnership(ctx, publicKey, cardID); err != nil {
+		return 0, nil, err
+	}
 	return s.reap.RespondToCard3DSChallenge(ctx, id, approve)
 }
 
-func (s *CardService) GetCard3DSChallenge(ctx context.Context, id string) (status int, body []byte, err error) {
-	return s.reap.GetCard3DSChallenge(ctx, id)
+func (s *CardService) GetCard3DSChallenge(ctx context.Context, publicKey, id string) (status int, body []byte, err error) {
+	status, body, cardID, err := s.challengeCardID(ctx, id)
+	if err != nil || cardID == "" {
+		return status, body, err
+	}
+	if err := s.checkOwnership(ctx, publicKey, cardID); err != nil {
+		return 0, nil, err
+	}
+	return status, body, nil
 }

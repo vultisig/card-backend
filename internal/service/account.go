@@ -22,10 +22,8 @@ func NewAccountService(pool *pgxpool.Pool, reapClient *reap.Client) *AccountServ
 
 // CreateAccount creates a REAP account owned by publicKey's REAP user,
 // forwarding idempotencyKey to REAP as-is, and records the created
-// account's ID as owned by publicKey (tracking only — GetAccount/
-// GetAccountBalance/GetAccountAssets don't enforce it below, since REAP
-// accounts can have co-signers beyond their creator). It returns
-// ErrNoReapUser if publicKey has no REAP user ID recorded yet.
+// account's ID as owned by publicKey. It returns ErrNoReapUser if
+// publicKey has no REAP user ID recorded yet.
 func (s *AccountService) CreateAccount(ctx context.Context, publicKey string, signers *reap.Signers, idempotencyKey string) (status int, body []byte, err error) {
 	reapUserID, err := resolveReapUserID(ctx, s.pool, publicKey)
 	if err != nil {
@@ -56,17 +54,35 @@ func (s *AccountService) GenerateSignerMessage(ctx context.Context) (status int,
 	return s.reap.GenerateSignerMessage(ctx)
 }
 
-// GetAccount is a thin, unscoped passthrough — see CreateAccount's comment
-// on why account ownership isn't enforced here.
-func (s *AccountService) GetAccount(ctx context.Context, id string) (status int, body []byte, err error) {
+func (s *AccountService) checkOwnership(ctx context.Context, publicKey, accountID string) error {
+	owned, err := accountownership.IsOwner(ctx, s.pool, publicKey, accountID)
+	if err != nil {
+		return err
+	}
+	if !owned {
+		return ErrResourceNotOwned
+	}
+	return nil
+}
+
+func (s *AccountService) GetAccount(ctx context.Context, publicKey, id string) (status int, body []byte, err error) {
+	if err := s.checkOwnership(ctx, publicKey, id); err != nil {
+		return 0, nil, err
+	}
 	return s.reap.GetAccount(ctx, id)
 }
 
-func (s *AccountService) GetAccountBalance(ctx context.Context, id string) (status int, body []byte, err error) {
+func (s *AccountService) GetAccountBalance(ctx context.Context, publicKey, id string) (status int, body []byte, err error) {
+	if err := s.checkOwnership(ctx, publicKey, id); err != nil {
+		return 0, nil, err
+	}
 	return s.reap.GetAccountBalance(ctx, id)
 }
 
-func (s *AccountService) GetAccountAssets(ctx context.Context, id string) (status int, body []byte, err error) {
+func (s *AccountService) GetAccountAssets(ctx context.Context, publicKey, id string) (status int, body []byte, err error) {
+	if err := s.checkOwnership(ctx, publicKey, id); err != nil {
+		return 0, nil, err
+	}
 	return s.reap.GetAccountAssets(ctx, id)
 }
 

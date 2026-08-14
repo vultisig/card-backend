@@ -366,30 +366,45 @@ func (s *Server) generateSignerMessage(c echo.Context) error {
 }
 
 func (s *Server) getAccount(c echo.Context) error {
-	status, body, err := s.accountService.GetAccount(c.Request().Context(), c.Param("id"))
-	if err != nil {
+	claims := c.Get("claims").(*service.Claims)
+	status, body, err := s.accountService.GetAccount(c.Request().Context(), claims.PublicKey, c.Param("id"))
+	switch {
+	case errors.Is(err, service.ErrResourceNotOwned):
+		return c.JSON(http.StatusNotFound, echo.Map{"error": "not found"})
+	case err != nil:
 		log.Printf("getAccount: %v", err)
 		return c.JSON(http.StatusInternalServerError, echo.Map{"error": "internal error"})
+	default:
+		return c.Blob(status, echo.MIMEApplicationJSON, body)
 	}
-	return c.Blob(status, echo.MIMEApplicationJSON, body)
 }
 
 func (s *Server) getAccountBalance(c echo.Context) error {
-	status, body, err := s.accountService.GetAccountBalance(c.Request().Context(), c.Param("id"))
-	if err != nil {
+	claims := c.Get("claims").(*service.Claims)
+	status, body, err := s.accountService.GetAccountBalance(c.Request().Context(), claims.PublicKey, c.Param("id"))
+	switch {
+	case errors.Is(err, service.ErrResourceNotOwned):
+		return c.JSON(http.StatusNotFound, echo.Map{"error": "not found"})
+	case err != nil:
 		log.Printf("getAccountBalance: %v", err)
 		return c.JSON(http.StatusInternalServerError, echo.Map{"error": "internal error"})
+	default:
+		return c.Blob(status, echo.MIMEApplicationJSON, body)
 	}
-	return c.Blob(status, echo.MIMEApplicationJSON, body)
 }
 
 func (s *Server) getAccountAssets(c echo.Context) error {
-	status, body, err := s.accountService.GetAccountAssets(c.Request().Context(), c.Param("id"))
-	if err != nil {
+	claims := c.Get("claims").(*service.Claims)
+	status, body, err := s.accountService.GetAccountAssets(c.Request().Context(), claims.PublicKey, c.Param("id"))
+	switch {
+	case errors.Is(err, service.ErrResourceNotOwned):
+		return c.JSON(http.StatusNotFound, echo.Map{"error": "not found"})
+	case err != nil:
 		log.Printf("getAccountAssets: %v", err)
 		return c.JSON(http.StatusInternalServerError, echo.Map{"error": "internal error"})
+	default:
+		return c.Blob(status, echo.MIMEApplicationJSON, body)
 	}
-	return c.Blob(status, echo.MIMEApplicationJSON, body)
 }
 
 func (s *Server) createCard(c echo.Context) error {
@@ -628,6 +643,7 @@ func (s *Server) pushProvisionCard(c echo.Context) error {
 }
 
 func (s *Server) respondToCard3DSChallenge(c echo.Context) error {
+	claims := c.Get("claims").(*service.Claims)
 	var req struct {
 		Approve *bool `json:"approve"`
 	}
@@ -635,113 +651,168 @@ func (s *Server) respondToCard3DSChallenge(c echo.Context) error {
 		return c.JSON(http.StatusBadRequest, echo.Map{"error": "invalid request"})
 	}
 
-	status, body, err := s.cardService.RespondToCard3DSChallenge(c.Request().Context(), c.Param("id"), *req.Approve)
-	if err != nil {
+	status, body, err := s.cardService.RespondToCard3DSChallenge(c.Request().Context(), claims.PublicKey, c.Param("id"), *req.Approve)
+	switch {
+	case errors.Is(err, service.ErrResourceNotOwned):
+		return c.JSON(http.StatusNotFound, echo.Map{"error": "not found"})
+	case err != nil:
 		log.Printf("respondToCard3DSChallenge: %v", err)
 		return c.JSON(http.StatusInternalServerError, echo.Map{"error": "internal error"})
+	default:
+		return c.Blob(status, echo.MIMEApplicationJSON, body)
 	}
-	return c.Blob(status, echo.MIMEApplicationJSON, body)
 }
 
 func (s *Server) getCard3DSChallenge(c echo.Context) error {
-	status, body, err := s.cardService.GetCard3DSChallenge(c.Request().Context(), c.Param("id"))
-	if err != nil {
+	claims := c.Get("claims").(*service.Claims)
+	status, body, err := s.cardService.GetCard3DSChallenge(c.Request().Context(), claims.PublicKey, c.Param("id"))
+	switch {
+	case errors.Is(err, service.ErrResourceNotOwned):
+		return c.JSON(http.StatusNotFound, echo.Map{"error": "not found"})
+	case err != nil:
 		log.Printf("getCard3DSChallenge: %v", err)
 		return c.JSON(http.StatusInternalServerError, echo.Map{"error": "internal error"})
+	default:
+		return c.Blob(status, echo.MIMEApplicationJSON, body)
 	}
-	return c.Blob(status, echo.MIMEApplicationJSON, body)
 }
 
 func (s *Server) createCardShipment(c echo.Context) error {
+	claims := c.Get("claims").(*service.Claims)
 	var req reap.CreateCardShipmentRequest
 	if err := c.Bind(&req); err != nil {
 		return c.JSON(http.StatusBadRequest, echo.Map{"error": "invalid request"})
 	}
 
-	status, body, err := s.cardShipmentService.CreateCardShipment(c.Request().Context(), req)
-	if err != nil {
+	status, body, err := s.cardShipmentService.CreateCardShipment(c.Request().Context(), claims.PublicKey, req)
+	switch {
+	case errors.Is(err, service.ErrMissingScopeFilter):
+		return c.JSON(http.StatusBadRequest, echo.Map{"error": "at least one owned card is required"})
+	case errors.Is(err, service.ErrResourceNotOwned):
+		return c.JSON(http.StatusNotFound, echo.Map{"error": "not found"})
+	case err != nil:
 		log.Printf("createCardShipment: %v", err)
 		return c.JSON(http.StatusInternalServerError, echo.Map{"error": "internal error"})
+	default:
+		return c.Blob(status, echo.MIMEApplicationJSON, body)
 	}
-	return c.Blob(status, echo.MIMEApplicationJSON, body)
 }
 
 func (s *Server) listCardShipments(c echo.Context) error {
-	status, body, err := s.cardShipmentService.ListCardShipments(c.Request().Context(), c.QueryParams())
-	if err != nil {
+	claims := c.Get("claims").(*service.Claims)
+	status, body, err := s.cardShipmentService.ListCardShipments(c.Request().Context(), claims.PublicKey, c.QueryParams())
+	switch {
+	case errors.Is(err, service.ErrMissingScopeFilter):
+		return c.JSON(http.StatusBadRequest, echo.Map{"error": "cardId filter is required"})
+	case errors.Is(err, service.ErrResourceNotOwned):
+		return c.JSON(http.StatusNotFound, echo.Map{"error": "not found"})
+	case err != nil:
 		log.Printf("listCardShipments: %v", err)
 		return c.JSON(http.StatusInternalServerError, echo.Map{"error": "internal error"})
+	default:
+		return c.Blob(status, echo.MIMEApplicationJSON, body)
 	}
-	return c.Blob(status, echo.MIMEApplicationJSON, body)
 }
 
 func (s *Server) getCardShipment(c echo.Context) error {
-	status, body, err := s.cardShipmentService.GetCardShipment(c.Request().Context(), c.Param("id"))
-	if err != nil {
+	claims := c.Get("claims").(*service.Claims)
+	status, body, err := s.cardShipmentService.GetCardShipment(c.Request().Context(), claims.PublicKey, c.Param("id"))
+	switch {
+	case errors.Is(err, service.ErrResourceNotOwned):
+		return c.JSON(http.StatusNotFound, echo.Map{"error": "not found"})
+	case err != nil:
 		log.Printf("getCardShipment: %v", err)
 		return c.JSON(http.StatusInternalServerError, echo.Map{"error": "internal error"})
+	default:
+		return c.Blob(status, echo.MIMEApplicationJSON, body)
 	}
-	return c.Blob(status, echo.MIMEApplicationJSON, body)
 }
 
 func (s *Server) deleteCardShipment(c echo.Context) error {
-	status, body, err := s.cardShipmentService.DeleteCardShipment(c.Request().Context(), c.Param("id"))
-	if err != nil {
+	claims := c.Get("claims").(*service.Claims)
+	status, body, err := s.cardShipmentService.DeleteCardShipment(c.Request().Context(), claims.PublicKey, c.Param("id"))
+	switch {
+	case errors.Is(err, service.ErrResourceNotOwned):
+		return c.JSON(http.StatusNotFound, echo.Map{"error": "not found"})
+	case err != nil:
 		log.Printf("deleteCardShipment: %v", err)
 		return c.JSON(http.StatusInternalServerError, echo.Map{"error": "internal error"})
+	default:
+		return c.Blob(status, echo.MIMEApplicationJSON, body)
 	}
-	return c.Blob(status, echo.MIMEApplicationJSON, body)
 }
 
 func (s *Server) updateCardShipment(c echo.Context) error {
+	claims := c.Get("claims").(*service.Claims)
 	var req reap.UpdateCardShipmentRequest
 	if err := c.Bind(&req); err != nil {
 		return c.JSON(http.StatusBadRequest, echo.Map{"error": "invalid request"})
 	}
 
-	status, body, err := s.cardShipmentService.UpdateCardShipment(c.Request().Context(), c.Param("id"), req)
-	if err != nil {
+	status, body, err := s.cardShipmentService.UpdateCardShipment(c.Request().Context(), claims.PublicKey, c.Param("id"), req)
+	switch {
+	case errors.Is(err, service.ErrResourceNotOwned):
+		return c.JSON(http.StatusNotFound, echo.Map{"error": "not found"})
+	case err != nil:
 		log.Printf("updateCardShipment: %v", err)
 		return c.JSON(http.StatusInternalServerError, echo.Map{"error": "internal error"})
+	default:
+		return c.Blob(status, echo.MIMEApplicationJSON, body)
 	}
-	return c.Blob(status, echo.MIMEApplicationJSON, body)
 }
 
 func (s *Server) addCardToShipment(c echo.Context) error {
+	claims := c.Get("claims").(*service.Claims)
 	var req reap.CardShipmentMember
 	if err := c.Bind(&req); err != nil {
 		return c.JSON(http.StatusBadRequest, echo.Map{"error": "invalid request"})
 	}
 
-	status, body, err := s.cardShipmentService.AddCardToShipment(c.Request().Context(), c.Param("id"), req)
-	if err != nil {
+	status, body, err := s.cardShipmentService.AddCardToShipment(c.Request().Context(), claims.PublicKey, c.Param("id"), req)
+	switch {
+	case errors.Is(err, service.ErrMissingScopeFilter):
+		return c.JSON(http.StatusBadRequest, echo.Map{"error": "cardId is required"})
+	case errors.Is(err, service.ErrResourceNotOwned):
+		return c.JSON(http.StatusNotFound, echo.Map{"error": "not found"})
+	case err != nil:
 		log.Printf("addCardToShipment: %v", err)
 		return c.JSON(http.StatusInternalServerError, echo.Map{"error": "internal error"})
+	default:
+		return c.Blob(status, echo.MIMEApplicationJSON, body)
 	}
-	return c.Blob(status, echo.MIMEApplicationJSON, body)
 }
 
 func (s *Server) removeCardFromShipment(c echo.Context) error {
-	status, body, err := s.cardShipmentService.RemoveCardFromShipment(c.Request().Context(), c.Param("id"), c.Param("memberId"))
-	if err != nil {
+	claims := c.Get("claims").(*service.Claims)
+	status, body, err := s.cardShipmentService.RemoveCardFromShipment(c.Request().Context(), claims.PublicKey, c.Param("id"), c.Param("memberId"))
+	switch {
+	case errors.Is(err, service.ErrResourceNotOwned):
+		return c.JSON(http.StatusNotFound, echo.Map{"error": "not found"})
+	case err != nil:
 		log.Printf("removeCardFromShipment: %v", err)
 		return c.JSON(http.StatusInternalServerError, echo.Map{"error": "internal error"})
+	default:
+		return c.Blob(status, echo.MIMEApplicationJSON, body)
 	}
-	return c.Blob(status, echo.MIMEApplicationJSON, body)
 }
 
 func (s *Server) submitCardShipment(c echo.Context) error {
+	claims := c.Get("claims").(*service.Claims)
 	idempotencyKey := c.Request().Header.Get("Idempotency-Key")
 	if idempotencyKey == "" {
 		return c.JSON(http.StatusBadRequest, echo.Map{"error": "Idempotency-Key header is required"})
 	}
 
-	status, body, err := s.cardShipmentService.SubmitCardShipment(c.Request().Context(), c.Param("id"), idempotencyKey)
-	if err != nil {
+	status, body, err := s.cardShipmentService.SubmitCardShipment(c.Request().Context(), claims.PublicKey, c.Param("id"), idempotencyKey)
+	switch {
+	case errors.Is(err, service.ErrResourceNotOwned):
+		return c.JSON(http.StatusNotFound, echo.Map{"error": "not found"})
+	case err != nil:
 		log.Printf("submitCardShipment: %v", err)
 		return c.JSON(http.StatusInternalServerError, echo.Map{"error": "internal error"})
+	default:
+		return c.Blob(status, echo.MIMEApplicationJSON, body)
 	}
-	return c.Blob(status, echo.MIMEApplicationJSON, body)
 }
 
 func (s *Server) listCardDesigns(c echo.Context) error {
@@ -763,12 +834,17 @@ func (s *Server) getCardDesign(c echo.Context) error {
 }
 
 func (s *Server) getCardTransaction(c echo.Context) error {
-	status, body, err := s.cardTransactionService.GetCardTransaction(c.Request().Context(), c.Param("id"))
-	if err != nil {
+	claims := c.Get("claims").(*service.Claims)
+	status, body, err := s.cardTransactionService.GetCardTransaction(c.Request().Context(), claims.PublicKey, c.Param("id"))
+	switch {
+	case errors.Is(err, service.ErrResourceNotOwned):
+		return c.JSON(http.StatusNotFound, echo.Map{"error": "not found"})
+	case err != nil:
 		log.Printf("getCardTransaction: %v", err)
 		return c.JSON(http.StatusInternalServerError, echo.Map{"error": "internal error"})
+	default:
+		return c.Blob(status, echo.MIMEApplicationJSON, body)
 	}
-	return c.Blob(status, echo.MIMEApplicationJSON, body)
 }
 
 func (s *Server) listActivities(c echo.Context) error {
@@ -880,6 +956,7 @@ func (s *Server) respondToFraudAlert(c echo.Context) error {
 }
 
 func (s *Server) simulateUserApplicationStatus(c echo.Context) error {
+	claims := c.Get("claims").(*service.Claims)
 	var req struct {
 		Status string `json:"status"`
 	}
@@ -887,12 +964,18 @@ func (s *Server) simulateUserApplicationStatus(c echo.Context) error {
 		return c.JSON(http.StatusBadRequest, echo.Map{"error": "invalid request"})
 	}
 
-	status, body, err := s.simulationService.SimulateUserApplicationStatus(c.Request().Context(), c.Param("id"), req.Status)
-	if err != nil {
+	status, body, err := s.simulationService.SimulateUserApplicationStatus(c.Request().Context(), claims.PublicKey, c.Param("id"), req.Status)
+	switch {
+	case errors.Is(err, service.ErrNoReapUser):
+		return c.JSON(http.StatusNotFound, echo.Map{"error": "no reap user for this vault"})
+	case errors.Is(err, service.ErrResourceNotOwned):
+		return c.JSON(http.StatusNotFound, echo.Map{"error": "not found"})
+	case err != nil:
 		log.Printf("simulateUserApplicationStatus: %v", err)
 		return c.JSON(http.StatusInternalServerError, echo.Map{"error": "internal error"})
+	default:
+		return c.Blob(status, echo.MIMEApplicationJSON, body)
 	}
-	return c.Blob(status, echo.MIMEApplicationJSON, body)
 }
 
 func (s *Server) simulateCompanyStatus(c echo.Context) error {
@@ -902,14 +985,19 @@ func (s *Server) simulateCompanyStatus(c echo.Context) error {
 	}
 
 	status, body, err := s.simulationService.SimulateCompanyStatus(c.Request().Context(), c.Param("id"), req)
-	if err != nil {
+	switch {
+	case errors.Is(err, service.ErrResourceNotOwned):
+		return c.JSON(http.StatusNotFound, echo.Map{"error": "not found"})
+	case err != nil:
 		log.Printf("simulateCompanyStatus: %v", err)
 		return c.JSON(http.StatusInternalServerError, echo.Map{"error": "internal error"})
+	default:
+		return c.Blob(status, echo.MIMEApplicationJSON, body)
 	}
-	return c.Blob(status, echo.MIMEApplicationJSON, body)
 }
 
 func (s *Server) simulateAccountStatus(c echo.Context) error {
+	claims := c.Get("claims").(*service.Claims)
 	var req struct {
 		Status string `json:"status"`
 	}
@@ -917,15 +1005,20 @@ func (s *Server) simulateAccountStatus(c echo.Context) error {
 		return c.JSON(http.StatusBadRequest, echo.Map{"error": "invalid request"})
 	}
 
-	status, body, err := s.simulationService.SimulateAccountStatus(c.Request().Context(), c.Param("id"), req.Status)
-	if err != nil {
+	status, body, err := s.simulationService.SimulateAccountStatus(c.Request().Context(), claims.PublicKey, c.Param("id"), req.Status)
+	switch {
+	case errors.Is(err, service.ErrResourceNotOwned):
+		return c.JSON(http.StatusNotFound, echo.Map{"error": "not found"})
+	case err != nil:
 		log.Printf("simulateAccountStatus: %v", err)
 		return c.JSON(http.StatusInternalServerError, echo.Map{"error": "internal error"})
+	default:
+		return c.Blob(status, echo.MIMEApplicationJSON, body)
 	}
-	return c.Blob(status, echo.MIMEApplicationJSON, body)
 }
 
 func (s *Server) simulateCardStatus(c echo.Context) error {
+	claims := c.Get("claims").(*service.Claims)
 	var req struct {
 		Status string `json:"status"`
 	}
@@ -933,94 +1026,128 @@ func (s *Server) simulateCardStatus(c echo.Context) error {
 		return c.JSON(http.StatusBadRequest, echo.Map{"error": "invalid request"})
 	}
 
-	status, body, err := s.simulationService.SimulateCardStatus(c.Request().Context(), c.Param("id"), req.Status)
-	if err != nil {
+	status, body, err := s.simulationService.SimulateCardStatus(c.Request().Context(), claims.PublicKey, c.Param("id"), req.Status)
+	switch {
+	case errors.Is(err, service.ErrResourceNotOwned):
+		return c.JSON(http.StatusNotFound, echo.Map{"error": "not found"})
+	case err != nil:
 		log.Printf("simulateCardStatus: %v", err)
 		return c.JSON(http.StatusInternalServerError, echo.Map{"error": "internal error"})
+	default:
+		return c.Blob(status, echo.MIMEApplicationJSON, body)
 	}
-	return c.Blob(status, echo.MIMEApplicationJSON, body)
 }
 
 func (s *Server) simulateAuthorization(c echo.Context) error {
+	claims := c.Get("claims").(*service.Claims)
 	var req reap.SimulateCardTransactionRequest
 	if err := c.Bind(&req); err != nil || req.CardID == "" {
 		return c.JSON(http.StatusBadRequest, echo.Map{"error": "invalid request"})
 	}
 
-	status, body, err := s.simulationService.SimulateAuthorization(c.Request().Context(), req)
-	if err != nil {
+	status, body, err := s.simulationService.SimulateAuthorization(c.Request().Context(), claims.PublicKey, req)
+	switch {
+	case errors.Is(err, service.ErrResourceNotOwned):
+		return c.JSON(http.StatusNotFound, echo.Map{"error": "not found"})
+	case err != nil:
 		log.Printf("simulateAuthorization: %v", err)
 		return c.JSON(http.StatusInternalServerError, echo.Map{"error": "internal error"})
+	default:
+		return c.Blob(status, echo.MIMEApplicationJSON, body)
 	}
-	return c.Blob(status, echo.MIMEApplicationJSON, body)
 }
 
 func (s *Server) simulateThreeDSAuthorization(c echo.Context) error {
+	claims := c.Get("claims").(*service.Claims)
 	var req reap.SimulateCardTransactionRequest
 	if err := c.Bind(&req); err != nil || req.CardID == "" {
 		return c.JSON(http.StatusBadRequest, echo.Map{"error": "invalid request"})
 	}
 
-	status, body, err := s.simulationService.SimulateThreeDSAuthorization(c.Request().Context(), req)
-	if err != nil {
+	status, body, err := s.simulationService.SimulateThreeDSAuthorization(c.Request().Context(), claims.PublicKey, req)
+	switch {
+	case errors.Is(err, service.ErrResourceNotOwned):
+		return c.JSON(http.StatusNotFound, echo.Map{"error": "not found"})
+	case err != nil:
 		log.Printf("simulateThreeDSAuthorization: %v", err)
 		return c.JSON(http.StatusInternalServerError, echo.Map{"error": "internal error"})
+	default:
+		return c.Blob(status, echo.MIMEApplicationJSON, body)
 	}
-	return c.Blob(status, echo.MIMEApplicationJSON, body)
 }
 
 func (s *Server) simulateDecline(c echo.Context) error {
+	claims := c.Get("claims").(*service.Claims)
 	var req reap.SimulateCardTransactionRequest
 	if err := c.Bind(&req); err != nil || req.CardID == "" {
 		return c.JSON(http.StatusBadRequest, echo.Map{"error": "invalid request"})
 	}
 
-	status, body, err := s.simulationService.SimulateDecline(c.Request().Context(), req)
-	if err != nil {
+	status, body, err := s.simulationService.SimulateDecline(c.Request().Context(), claims.PublicKey, req)
+	switch {
+	case errors.Is(err, service.ErrResourceNotOwned):
+		return c.JSON(http.StatusNotFound, echo.Map{"error": "not found"})
+	case err != nil:
 		log.Printf("simulateDecline: %v", err)
 		return c.JSON(http.StatusInternalServerError, echo.Map{"error": "internal error"})
+	default:
+		return c.Blob(status, echo.MIMEApplicationJSON, body)
 	}
-	return c.Blob(status, echo.MIMEApplicationJSON, body)
 }
 
 func (s *Server) simulateClearing(c echo.Context) error {
+	claims := c.Get("claims").(*service.Claims)
 	var req reap.SimulateCardTransactionRequest
 	if err := c.Bind(&req); err != nil || req.CardID == "" {
 		return c.JSON(http.StatusBadRequest, echo.Map{"error": "invalid request"})
 	}
 
-	status, body, err := s.simulationService.SimulateClearing(c.Request().Context(), req)
-	if err != nil {
+	status, body, err := s.simulationService.SimulateClearing(c.Request().Context(), claims.PublicKey, req)
+	switch {
+	case errors.Is(err, service.ErrResourceNotOwned):
+		return c.JSON(http.StatusNotFound, echo.Map{"error": "not found"})
+	case err != nil:
 		log.Printf("simulateClearing: %v", err)
 		return c.JSON(http.StatusInternalServerError, echo.Map{"error": "internal error"})
+	default:
+		return c.Blob(status, echo.MIMEApplicationJSON, body)
 	}
-	return c.Blob(status, echo.MIMEApplicationJSON, body)
 }
 
 func (s *Server) simulateReversal(c echo.Context) error {
+	claims := c.Get("claims").(*service.Claims)
 	var req reap.SimulateCardTransactionRequest
 	if err := c.Bind(&req); err != nil || req.CardID == "" || req.TransactionID == "" {
 		return c.JSON(http.StatusBadRequest, echo.Map{"error": "invalid request"})
 	}
 
-	status, body, err := s.simulationService.SimulateReversal(c.Request().Context(), req)
-	if err != nil {
+	status, body, err := s.simulationService.SimulateReversal(c.Request().Context(), claims.PublicKey, req)
+	switch {
+	case errors.Is(err, service.ErrResourceNotOwned):
+		return c.JSON(http.StatusNotFound, echo.Map{"error": "not found"})
+	case err != nil:
 		log.Printf("simulateReversal: %v", err)
 		return c.JSON(http.StatusInternalServerError, echo.Map{"error": "internal error"})
+	default:
+		return c.Blob(status, echo.MIMEApplicationJSON, body)
 	}
-	return c.Blob(status, echo.MIMEApplicationJSON, body)
 }
 
 func (s *Server) simulateRefund(c echo.Context) error {
+	claims := c.Get("claims").(*service.Claims)
 	var req reap.SimulateCardTransactionRequest
 	if err := c.Bind(&req); err != nil || req.CardID == "" {
 		return c.JSON(http.StatusBadRequest, echo.Map{"error": "invalid request"})
 	}
 
-	status, body, err := s.simulationService.SimulateRefund(c.Request().Context(), req)
-	if err != nil {
+	status, body, err := s.simulationService.SimulateRefund(c.Request().Context(), claims.PublicKey, req)
+	switch {
+	case errors.Is(err, service.ErrResourceNotOwned):
+		return c.JSON(http.StatusNotFound, echo.Map{"error": "not found"})
+	case err != nil:
 		log.Printf("simulateRefund: %v", err)
 		return c.JSON(http.StatusInternalServerError, echo.Map{"error": "internal error"})
+	default:
+		return c.Blob(status, echo.MIMEApplicationJSON, body)
 	}
-	return c.Blob(status, echo.MIMEApplicationJSON, body)
 }
