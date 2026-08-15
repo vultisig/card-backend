@@ -160,8 +160,8 @@ func (s *Server) health(c echo.Context) error {
 
 func (s *Server) nonce(c echo.Context) error {
 	publicKey := c.QueryParam("public_key")
-	if publicKey == "" {
-		return c.JSON(http.StatusBadRequest, echo.Map{"error": "invalid request"})
+	if err := service.ValidatePublicKey(publicKey); err != nil {
+		return c.JSON(http.StatusBadRequest, echo.Map{"error": "public key must be compressed lowercase hex"})
 	}
 
 	nonce, err := reapmapping.GetNonce(c.Request().Context(), s.pool, publicKey)
@@ -178,7 +178,7 @@ func (s *Server) auth(c echo.Context) error {
 		Nonce     int64  `json:"nonce"`
 		Signature string `json:"signature"`
 	}
-	if err := c.Bind(&req); err != nil || req.PublicKey == "" || req.Signature == "" {
+	if err := c.Bind(&req); err != nil || req.Signature == "" {
 		return c.JSON(http.StatusBadRequest, echo.Map{"error": "invalid request"})
 	}
 
@@ -186,6 +186,8 @@ func (s *Server) auth(c echo.Context) error {
 	switch {
 	case err == nil:
 		return c.JSON(http.StatusOK, echo.Map{"access_token": token, "token_type": "Bearer"})
+	case errors.Is(err, service.ErrInvalidPublicKey):
+		return c.JSON(http.StatusBadRequest, echo.Map{"error": "public key must be compressed lowercase hex"})
 	case errors.Is(err, service.ErrInvalidSignature), errors.Is(err, service.ErrNonceUsed):
 		return c.JSON(http.StatusUnauthorized, echo.Map{"error": "invalid signature or nonce"})
 	default:
