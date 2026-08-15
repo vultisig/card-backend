@@ -22,6 +22,7 @@ const accessTokenDuration = 24 * time.Hour
 
 var (
 	ErrInvalidSignature = errors.New("invalid signature")
+	ErrInvalidPublicKey = errors.New("public key is not in canonical form")
 	ErrNonceUsed        = errors.New("nonce already used")
 )
 
@@ -39,13 +40,17 @@ func NewAuthService(jwtSecret string, pool *pgxpool.Pool) *AuthService {
 	return &AuthService{jwtSecret: []byte(jwtSecret), pool: pool}
 }
 
-// Authenticate verifies that signature is a valid secp256k1 signature (DER,
-// hex-encoded) over nonce, made by the vault key publicKey, and that nonce
-// is publicKey's next expected nonce per its VultisigReapMapping row
-// (replay protection; a vault with no row yet has an implicit nonce of 0).
-// On success it issues a JWT access token and advances the nonce, creating
-// the mapping row on first use.
+// Authenticate verifies that publicKey is canonical (see ValidatePublicKey),
+// that signature is a valid secp256k1 signature (DER, hex-encoded) over
+// nonce, made by that key, and that nonce is publicKey's next expected nonce
+// per its VultisigReapMapping row (replay protection; a vault with no row yet
+// has an implicit nonce of 0). On success it issues a JWT access token and
+// advances the nonce, creating the mapping row on first use.
 func (a *AuthService) Authenticate(ctx context.Context, publicKey string, nonce int64, signatureHex string) (string, error) {
+	if err := ValidatePublicKey(publicKey); err != nil {
+		return "", err
+	}
+
 	currentNonce, err := reapmapping.GetNonce(ctx, a.pool, publicKey)
 	if err != nil {
 		return "", err
@@ -78,10 +83,28 @@ func (a *AuthService) Authenticate(ctx context.Context, publicKey string, nonce 
 	return token.SignedString(a.jwtSecret)
 }
 
+// ValidatePublicKey reports whether publicKey is the one form a vault may
+// identify itself by: compressed secp256k1, 66 lowercase hex chars, no 0x.
+// Other spellings are rejected, not normalized, so one vault stays one row.
+func ValidatePublicKey(publicKey string) error {
+	pubKeyBytes, err := hex.DecodeString(publicKey)
+	if err != nil {
+		return ErrInvalidPublicKey
+	}
+	pubKey, err := secp256k1.ParsePubKey(pubKeyBytes)
+	if err != nil {
+		return ErrInvalidPublicKey
+	}
+	if hex.EncodeToString(pubKey.SerializeCompressed()) != publicKey {
+		return ErrInvalidPublicKey
+	}
+	return nil
+}
+
 // verifySignature reports whether signatureHex (DER-encoded secp256k1
 // signature, hex) is a valid signature over nonce made by publicKey (hex).
 func verifySignature(publicKey string, nonce int64, signatureHex string) bool {
-	pubKeyBytes, err := hex.DecodeString(strings.TrimPrefix(publicKey, "0x"))
+	pubKeyBytes, err := hex.DecodeString(publicKey)
 	if err != nil {
 		return false
 	}
