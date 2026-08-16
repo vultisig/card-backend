@@ -29,18 +29,19 @@ func Record(ctx context.Context, db Querier, publicKey, cardID string) error {
 	return err
 }
 
-// IsOwner reports whether cardID is recorded as owned by publicKey. It
-// returns false, not an error, if cardID has no ownership record at all.
-func IsOwner(ctx context.Context, db Querier, publicKey, cardID string) (bool, error) {
-	var owner string
-	err := db.QueryRow(ctx, `
+// Owner returns the vault public key recorded as owning cardID. found is
+// false, with no error, if cardID has no ownership record at all — callers
+// distinguish that from a recorded mismatch, since a missing row can be
+// healed from REAP while a mismatch can't.
+func Owner(ctx context.Context, db Querier, cardID string) (owner string, found bool, err error) {
+	err = db.QueryRow(ctx, `
 		SELECT vault_public_key FROM vultisig_card_ownership WHERE card_id = $1
 	`, cardID).Scan(&owner)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return false, nil
+		return "", false, nil
 	}
 	if err != nil {
-		return false, err
+		return "", false, err
 	}
-	return owner == publicKey, nil
+	return owner, true, nil
 }

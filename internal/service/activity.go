@@ -6,23 +6,26 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/vultisig/card-backend/internal/accountownership"
-	"github.com/vultisig/card-backend/internal/cardownership"
 	"github.com/vultisig/card-backend/internal/reap"
 )
 
 // ActivityService backs GET /activities. REAP's only filters that identify
 // a specific card/account are accountId and cardId (no userId/ownerId), so
-// ListActivities requires at least one of them and checks it against
-// cardownership/accountownership before forwarding, so a vault can't list
+// ListActivities requires at least one of them and checks it against the
+// card/account ownershipResolver before forwarding, so a vault can't list
 // every vault's activity by omitting filters.
 type ActivityService struct {
-	pool *pgxpool.Pool
-	reap *reap.Client
+	reap     *reap.Client
+	cards    ownershipResolver
+	accounts ownershipResolver
 }
 
 func NewActivityService(pool *pgxpool.Pool, reapClient *reap.Client) *ActivityService {
-	return &ActivityService{pool: pool, reap: reapClient}
+	return &ActivityService{
+		reap:     reapClient,
+		cards:    newCardOwnershipResolver(pool, reapClient),
+		accounts: newAccountOwnershipResolver(pool, reapClient),
+	}
 }
 
 // ListActivities returns ErrMissingScopeFilter if query has neither
@@ -49,22 +52,14 @@ func (s *ActivityService) ListActivities(ctx context.Context, publicKey string, 
 	}
 
 	if cardID != "" {
-		owned, err := cardownership.IsOwner(ctx, s.pool, publicKey, cardID)
-		if err != nil {
+		if err := s.cards.require(ctx, publicKey, cardID); err != nil {
 			return 0, nil, err
-		}
-		if !owned {
-			return 0, nil, ErrResourceNotOwned
 		}
 	}
 
 	if accountID != "" {
-		owned, err := accountownership.IsOwner(ctx, s.pool, publicKey, accountID)
-		if err != nil {
+		if err := s.accounts.require(ctx, publicKey, accountID); err != nil {
 			return 0, nil, err
-		}
-		if !owned {
-			return 0, nil, ErrResourceNotOwned
 		}
 	}
 

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"log"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
@@ -14,9 +15,13 @@ import (
 var (
 	ErrReapUserExists = errors.New("reap user already exists")
 	ErrNoReapUser     = errors.New("no reap user for this vault")
-	// ErrResourceNotOwned is returned when publicKey's vault requests an
-	// action on a REAP resource ID (card, fraud alert, activity filter)
-	// that's recorded as owned by a different vault.
+	// ErrResourceNotOwned is returned when publicKey's vault may not act on
+	// a REAP resource ID: the local ownership row names another vault, REAP
+	// doesn't report the resource as owned by the vault's REAP user, REAP
+	// has no such resource, or the vault has no REAP user at all. See
+	// ownershipResolver.require for the full decision table. Handlers map it
+	// to 404 — it deliberately doesn't distinguish "someone else's" from
+	// "doesn't exist".
 	ErrResourceNotOwned = errors.New("resource not owned by this vault")
 	// ErrMissingScopeFilter is returned when a list endpoint requires an
 	// ownership-checkable filter (e.g. accountId/cardId) and the caller
@@ -71,16 +76,24 @@ func (s *UserService) CreateUser(ctx context.Context, publicKey string, req reap
 		return status, body, nil
 	}
 
+	// The REAP user exists from here on. Unlike cards and accounts there's
+	// nothing to heal it from — this mapping is what every other lookup is
+	// keyed on, and CreateUser carries no idempotency key, so a retry makes
+	// a second REAP user (a second KYC identity). Log enough on each of the
+	// three failure paths below to reattach the orphan by hand.
 	var created struct {
 		ID string `json:"id"`
 	}
 	if err := json.Unmarshal(body, &created); err != nil || created.ID == "" {
+		log.Printf("user: created REAP user for vault %s but failed to parse id from response: %s", publicKey, body)
 		return 0, nil, errors.New("reap: create user response missing id")
 	}
 	if _, err := reapmapping.SetReapUserID(ctx, tx, publicKey, created.ID); err != nil {
+		log.Printf("user: created REAP user %s but failed to map it to vault %s: %v", created.ID, publicKey, err)
 		return 0, nil, err
 	}
 	if err := tx.Commit(ctx); err != nil {
+		log.Printf("user: created REAP user %s but failed to commit its mapping to vault %s: %v", created.ID, publicKey, err)
 		return 0, nil, err
 	}
 	return status, body, nil

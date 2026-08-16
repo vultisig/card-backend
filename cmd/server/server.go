@@ -359,6 +359,8 @@ func (s *Server) createAccount(c echo.Context) error {
 	switch {
 	case errors.Is(err, service.ErrNoReapUser):
 		return c.JSON(http.StatusNotFound, echo.Map{"error": "no reap user for this vault"})
+	case errors.Is(err, service.ErrResourceNotOwned):
+		return c.JSON(http.StatusNotFound, echo.Map{"error": "not found"})
 	case err != nil:
 		log.Printf("createAccount: %v", err)
 		return c.JSON(http.StatusInternalServerError, echo.Map{"error": "internal error"})
@@ -464,6 +466,8 @@ func (s *Server) createCard(c echo.Context) error {
 	switch {
 	case errors.Is(err, service.ErrNoReapUser):
 		return c.JSON(http.StatusNotFound, echo.Map{"error": "no reap user for this vault"})
+	case errors.Is(err, service.ErrResourceNotOwned):
+		return c.JSON(http.StatusNotFound, echo.Map{"error": "not found"})
 	case err != nil:
 		log.Printf("createCard: %v", err)
 		return c.JSON(http.StatusInternalServerError, echo.Map{"error": "internal error"})

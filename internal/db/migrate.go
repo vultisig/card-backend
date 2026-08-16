@@ -44,12 +44,6 @@ CREATE TABLE IF NOT EXISTS vultisig_account_ownership (
 	created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
-CREATE TABLE IF NOT EXISTS vultisig_user_card_ownership (
-	card_id TEXT PRIMARY KEY,
-	reap_user_id TEXT NOT NULL,
-	created_at TIMESTAMPTZ NOT NULL DEFAULT now()
-);
-
 CREATE TABLE IF NOT EXISTS vultisig_reap_webhook_events (
 	event_id TEXT PRIMARY KEY,
 	event_type TEXT NOT NULL,

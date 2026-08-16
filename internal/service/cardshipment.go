@@ -8,28 +8,19 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/vultisig/card-backend/internal/cardownership"
 	"github.com/vultisig/card-backend/internal/reap"
 )
 
 type CardShipmentService struct {
-	pool *pgxpool.Pool
-	reap *reap.Client
+	reap  *reap.Client
+	cards ownershipResolver
 }
 
 func NewCardShipmentService(pool *pgxpool.Pool, reapClient *reap.Client) *CardShipmentService {
-	return &CardShipmentService{pool: pool, reap: reapClient}
-}
-
-func (s *CardShipmentService) checkCardOwnership(ctx context.Context, publicKey, cardID string) error {
-	owned, err := cardownership.IsOwner(ctx, s.pool, publicKey, cardID)
-	if err != nil {
-		return err
+	return &CardShipmentService{
+		reap:  reapClient,
+		cards: newCardOwnershipResolver(pool, reapClient),
 	}
-	if !owned {
-		return ErrResourceNotOwned
-	}
-	return nil
 }
 
 func (s *CardShipmentService) checkShipmentMembers(ctx context.Context, publicKey string, members []reap.CardShipmentMember) error {
@@ -40,7 +31,7 @@ func (s *CardShipmentService) checkShipmentMembers(ctx context.Context, publicKe
 		if member.CardID == "" {
 			return ErrMissingScopeFilter
 		}
-		if err := s.checkCardOwnership(ctx, publicKey, member.CardID); err != nil {
+		if err := s.cards.require(ctx, publicKey, member.CardID); err != nil {
 			return err
 		}
 	}
@@ -78,7 +69,7 @@ func (s *CardShipmentService) fetchOwnedShipment(ctx context.Context, publicKey,
 		return 0, nil, err
 	}
 	for _, cardID := range cardIDs {
-		if err := s.checkCardOwnership(ctx, publicKey, cardID); err != nil {
+		if err := s.cards.require(ctx, publicKey, cardID); err != nil {
 			return 0, nil, err
 		}
 	}
@@ -97,7 +88,7 @@ func (s *CardShipmentService) ListCardShipments(ctx context.Context, publicKey s
 	if cardID == "" {
 		return 0, nil, ErrMissingScopeFilter
 	}
-	if err := s.checkCardOwnership(ctx, publicKey, cardID); err != nil {
+	if err := s.cards.require(ctx, publicKey, cardID); err != nil {
 		return 0, nil, err
 	}
 	query.Set("cardId", cardID)
@@ -129,7 +120,7 @@ func (s *CardShipmentService) AddCardToShipment(ctx context.Context, publicKey, 
 	if member.CardID == "" {
 		return 0, nil, ErrMissingScopeFilter
 	}
-	if err := s.checkCardOwnership(ctx, publicKey, member.CardID); err != nil {
+	if err := s.cards.require(ctx, publicKey, member.CardID); err != nil {
 		return 0, nil, err
 	}
 	return s.reap.AddCardToShipment(ctx, id, member)

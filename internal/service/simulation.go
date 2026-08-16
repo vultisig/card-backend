@@ -7,8 +7,6 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/vultisig/card-backend/internal/accountownership"
-	"github.com/vultisig/card-backend/internal/cardownership"
 	"github.com/vultisig/card-backend/internal/reap"
 )
 
@@ -16,34 +14,19 @@ import (
 // helpers for advancing application/company/account/card status and
 // simulating card-transaction lifecycle events.
 type SimulationService struct {
-	pool *pgxpool.Pool
-	reap *reap.Client
+	pool     *pgxpool.Pool
+	reap     *reap.Client
+	cards    ownershipResolver
+	accounts ownershipResolver
 }
 
 func NewSimulationService(pool *pgxpool.Pool, reapClient *reap.Client) *SimulationService {
-	return &SimulationService{pool: pool, reap: reapClient}
-}
-
-func (s *SimulationService) checkCardOwnership(ctx context.Context, publicKey, cardID string) error {
-	owned, err := cardownership.IsOwner(ctx, s.pool, publicKey, cardID)
-	if err != nil {
-		return err
+	return &SimulationService{
+		pool:     pool,
+		reap:     reapClient,
+		cards:    newCardOwnershipResolver(pool, reapClient),
+		accounts: newAccountOwnershipResolver(pool, reapClient),
 	}
-	if !owned {
-		return ErrResourceNotOwned
-	}
-	return nil
-}
-
-func (s *SimulationService) checkAccountOwnership(ctx context.Context, publicKey, accountID string) error {
-	owned, err := accountownership.IsOwner(ctx, s.pool, publicKey, accountID)
-	if err != nil {
-		return err
-	}
-	if !owned {
-		return ErrResourceNotOwned
-	}
-	return nil
 }
 
 func (s *SimulationService) checkTransactionOwnership(ctx context.Context, publicKey, transactionID string) error {
@@ -63,7 +46,7 @@ func (s *SimulationService) checkTransactionOwnership(ctx context.Context, publi
 	if err := json.Unmarshal(body, &txn); err != nil || txn.CardID == "" {
 		return errors.New("reap: get card transaction response missing cardId")
 	}
-	return s.checkCardOwnership(ctx, publicKey, txn.CardID)
+	return s.cards.require(ctx, publicKey, txn.CardID)
 }
 
 func (s *SimulationService) SimulateUserApplicationStatus(ctx context.Context, publicKey, userID, status string) (statusCode int, body []byte, err error) {
@@ -82,14 +65,14 @@ func (s *SimulationService) SimulateCompanyStatus(ctx context.Context, companyID
 }
 
 func (s *SimulationService) SimulateAccountStatus(ctx context.Context, publicKey, id, status string) (statusCode int, body []byte, err error) {
-	if err := s.checkAccountOwnership(ctx, publicKey, id); err != nil {
+	if err := s.accounts.require(ctx, publicKey, id); err != nil {
 		return 0, nil, err
 	}
 	return s.reap.SimulateAccountStatus(ctx, id, status)
 }
 
 func (s *SimulationService) SimulateCardStatus(ctx context.Context, publicKey, id, status string) (statusCode int, body []byte, err error) {
-	if err := s.checkCardOwnership(ctx, publicKey, id); err != nil {
+	if err := s.cards.require(ctx, publicKey, id); err != nil {
 		return 0, nil, err
 	}
 	return s.reap.SimulateCardStatus(ctx, id, status)
@@ -102,7 +85,7 @@ func (s *SimulationService) SimulateCardStatus(ctx context.Context, publicKey, i
 // incrementally authorize another vault's transaction by pairing their own
 // cardId with someone else's transactionId.
 func (s *SimulationService) SimulateAuthorization(ctx context.Context, publicKey string, req reap.SimulateCardTransactionRequest) (statusCode int, body []byte, err error) {
-	if err := s.checkCardOwnership(ctx, publicKey, req.CardID); err != nil {
+	if err := s.cards.require(ctx, publicKey, req.CardID); err != nil {
 		return 0, nil, err
 	}
 	if err := s.checkTransactionOwnership(ctx, publicKey, req.TransactionID); err != nil {
@@ -112,7 +95,7 @@ func (s *SimulationService) SimulateAuthorization(ctx context.Context, publicKey
 }
 
 func (s *SimulationService) SimulateThreeDSAuthorization(ctx context.Context, publicKey string, req reap.SimulateCardTransactionRequest) (statusCode int, body []byte, err error) {
-	if err := s.checkCardOwnership(ctx, publicKey, req.CardID); err != nil {
+	if err := s.cards.require(ctx, publicKey, req.CardID); err != nil {
 		return 0, nil, err
 	}
 	return s.reap.SimulateThreeDSAuthorization(ctx, req)
@@ -124,7 +107,7 @@ func (s *SimulationService) SimulateThreeDSAuthorization(ctx context.Context, pu
 // transaction's card ownership so a caller can't decline another vault's
 // transaction by pairing their own cardId with someone else's transactionId.
 func (s *SimulationService) SimulateDecline(ctx context.Context, publicKey string, req reap.SimulateCardTransactionRequest) (statusCode int, body []byte, err error) {
-	if err := s.checkCardOwnership(ctx, publicKey, req.CardID); err != nil {
+	if err := s.cards.require(ctx, publicKey, req.CardID); err != nil {
 		return 0, nil, err
 	}
 	if err := s.checkTransactionOwnership(ctx, publicKey, req.TransactionID); err != nil {
@@ -139,7 +122,7 @@ func (s *SimulationService) SimulateDecline(ctx context.Context, publicKey strin
 // card ownership so a caller can't clear another vault's authorization by
 // pairing their own cardId with someone else's transactionId.
 func (s *SimulationService) SimulateClearing(ctx context.Context, publicKey string, req reap.SimulateCardTransactionRequest) (statusCode int, body []byte, err error) {
-	if err := s.checkCardOwnership(ctx, publicKey, req.CardID); err != nil {
+	if err := s.cards.require(ctx, publicKey, req.CardID); err != nil {
 		return 0, nil, err
 	}
 	if err := s.checkTransactionOwnership(ctx, publicKey, req.TransactionID); err != nil {
@@ -149,7 +132,7 @@ func (s *SimulationService) SimulateClearing(ctx context.Context, publicKey stri
 }
 
 func (s *SimulationService) SimulateReversal(ctx context.Context, publicKey string, req reap.SimulateCardTransactionRequest) (statusCode int, body []byte, err error) {
-	if err := s.checkCardOwnership(ctx, publicKey, req.CardID); err != nil {
+	if err := s.cards.require(ctx, publicKey, req.CardID); err != nil {
 		return 0, nil, err
 	}
 	if err := s.checkTransactionOwnership(ctx, publicKey, req.TransactionID); err != nil {
@@ -164,7 +147,7 @@ func (s *SimulationService) SimulateReversal(ctx context.Context, publicKey stri
 // transaction's card ownership so a caller can't refund another vault's
 // transaction by pairing their own cardId with someone else's transactionId.
 func (s *SimulationService) SimulateRefund(ctx context.Context, publicKey string, req reap.SimulateCardTransactionRequest) (statusCode int, body []byte, err error) {
-	if err := s.checkCardOwnership(ctx, publicKey, req.CardID); err != nil {
+	if err := s.cards.require(ctx, publicKey, req.CardID); err != nil {
 		return 0, nil, err
 	}
 	if err := s.checkTransactionOwnership(ctx, publicKey, req.TransactionID); err != nil {
