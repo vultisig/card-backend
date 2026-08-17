@@ -1,11 +1,13 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"io"
 	"log"
 	"net/http"
 	"strconv"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/labstack/echo/v4"
@@ -147,8 +149,29 @@ func NewServer(pool *pgxpool.Pool, authService *service.AuthService, userService
 	return s
 }
 
+// writeTimeout covers the handler, so it has to stay above the REAP client's
+// own request timeout.
+const (
+	readHeaderTimeout = 10 * time.Second
+	readTimeout       = 30 * time.Second
+	writeTimeout      = 30 * time.Second
+	idleTimeout       = 120 * time.Second
+)
+
 func (s *Server) Start(addr string) error {
+	// Configure Echo's own server, not one we pass to StartServer: Shutdown only
+	// knows about e.Server.
+	s.echo.Server.ReadHeaderTimeout = readHeaderTimeout
+	s.echo.Server.ReadTimeout = readTimeout
+	s.echo.Server.WriteTimeout = writeTimeout
+	s.echo.Server.IdleTimeout = idleTimeout
 	return s.echo.Start(addr)
+}
+
+// Shutdown stops accepting connections and waits for in-flight requests, until
+// ctx is done.
+func (s *Server) Shutdown(ctx context.Context) error {
+	return s.echo.Shutdown(ctx)
 }
 
 func (s *Server) health(c echo.Context) error {
