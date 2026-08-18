@@ -175,14 +175,15 @@ func (s *Server) nonce(c echo.Context) error {
 func (s *Server) auth(c echo.Context) error {
 	var req struct {
 		PublicKey string `json:"public_key"`
+		ChainCode string `json:"chain_code"`
 		Nonce     int64  `json:"nonce"`
 		Signature string `json:"signature"`
 	}
-	if err := c.Bind(&req); err != nil || req.PublicKey == "" || req.Signature == "" {
+	if err := c.Bind(&req); err != nil || req.PublicKey == "" || req.ChainCode == "" || req.Signature == "" {
 		return c.JSON(http.StatusBadRequest, echo.Map{"error": "invalid request"})
 	}
 
-	token, err := s.authService.Authenticate(c.Request().Context(), req.PublicKey, req.Nonce, req.Signature)
+	token, err := s.authService.Authenticate(c.Request().Context(), req.PublicKey, req.ChainCode, req.Nonce, req.Signature)
 	switch {
 	case err == nil:
 		return c.JSON(http.StatusOK, echo.Map{"access_token": token, "token_type": "Bearer"})
@@ -230,6 +231,7 @@ func (s *Server) createUser(c echo.Context) error {
 		TermsAcceptanceVersion string `json:"termsAcceptanceVersion"`
 	}
 	if err := c.Bind(&req); err != nil || req.Email == "" || req.PhoneNumber == "" || req.TermsAcceptanceVersion == "" {
+		log.Printf("createUser: invalid request: %v, req: %+v", err, req)
 		return c.JSON(http.StatusBadRequest, echo.Map{"error": "invalid request"})
 	}
 
