@@ -2,9 +2,11 @@ package service
 
 import (
 	"context"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"log"
 	"strconv"
 	"strings"
 	"time"
@@ -15,7 +17,9 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/labstack/echo/v4"
 
+	"github.com/vultisig/card-backend/internal/bip32"
 	"github.com/vultisig/card-backend/internal/reapmapping"
+	"github.com/vultisig/card-backend/internal/vaulttoken"
 )
 
 const accessTokenDuration = 24 * time.Hour
@@ -40,12 +44,14 @@ func NewAuthService(jwtSecret string, pool *pgxpool.Pool) *AuthService {
 }
 
 // Authenticate verifies that signature is a valid secp256k1 signature (DER,
-// hex-encoded) over nonce, made by the vault key publicKey, and that nonce
-// is publicKey's next expected nonce per its VultisigReapMapping row
-// (replay protection; a vault with no row yet has an implicit nonce of 0).
-// On success it issues a JWT access token and advances the nonce, creating
-// the mapping row on first use.
-func (a *AuthService) Authenticate(ctx context.Context, publicKey string, nonce int64, signatureHex string) (string, error) {
+// hex-encoded) over nonce, made by the vault's unhardened ETH key
+// (bip32.ETHPath, derived from the vault's root key publicKey and
+// chainCodeHex), and that nonce is publicKey's next expected nonce per its
+// VultisigReapMapping row (replay protection; a vault with no row yet has
+// an implicit nonce of 0). On success it issues a JWT access token — keyed
+// on the root publicKey, the vault's persistent identity — and advances the
+// nonce, creating the mapping row on first use.
+func (a *AuthService) Authenticate(ctx context.Context, publicKey string, chainCodeHex string, nonce int64, signatureHex string) (string, error) {
 	currentNonce, err := reapmapping.GetNonce(ctx, a.pool, publicKey)
 	if err != nil {
 		return "", err
@@ -54,7 +60,7 @@ func (a *AuthService) Authenticate(ctx context.Context, publicKey string, nonce 
 		return "", ErrNonceUsed
 	}
 
-	if !verifySignature(publicKey, nonce, signatureHex) {
+	if !verifySignature(publicKey, chainCodeHex, nonce, signatureHex) {
 		return "", ErrInvalidSignature
 	}
 
@@ -66,29 +72,67 @@ func (a *AuthService) Authenticate(ctx context.Context, publicKey string, nonce 
 		return "", ErrNonceUsed
 	}
 
+	tokenID, err := newTokenID()
+	if err != nil {
+		return "", err
+	}
 	now := time.Now()
+	expiresAt := now.Add(accessTokenDuration)
 	claims := &Claims{
 		RegisteredClaims: jwt.RegisteredClaims{
+			ID:        tokenID,
 			IssuedAt:  jwt.NewNumericDate(now),
-			ExpiresAt: jwt.NewNumericDate(now.Add(accessTokenDuration)),
+			ExpiresAt: jwt.NewNumericDate(expiresAt),
 		},
 		PublicKey: publicKey,
 	}
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
-	return token.SignedString(a.jwtSecret)
+	signed, err := token.SignedString(a.jwtSecret)
+	if err != nil {
+		return "", err
+	}
+
+	if err := vaulttoken.Record(ctx, a.pool, tokenID, publicKey, expiresAt); err != nil {
+		return "", err
+	}
+	return signed, nil
+}
+
+// newTokenID generates a random JWT ID (jti) for an issued access token, so
+// it can be looked up in vault_tokens independent of its signature.
+func newTokenID() (string, error) {
+	b := make([]byte, 16)
+	if _, err := rand.Read(b); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(b), nil
 }
 
 // verifySignature reports whether signatureHex (DER-encoded secp256k1
-// signature, hex) is a valid signature over nonce made by publicKey (hex).
-func verifySignature(publicKey string, nonce int64, signatureHex string) bool {
+// signature, hex) is a valid signature over nonce made by the unhardened
+// ETH key (bip32.ETHPath) derived from root public key publicKey (hex) and
+// chain code chainCodeHex (hex) — not by publicKey itself, since the
+// client signs with its derived ETH private key, never the root key.
+func verifySignature(publicKey, chainCodeHex string, nonce int64, signatureHex string) bool {
 	pubKeyBytes, err := hex.DecodeString(strings.TrimPrefix(publicKey, "0x"))
 	if err != nil {
 		return false
 	}
-	pubKey, err := secp256k1.ParsePubKey(pubKeyBytes)
+	rootPubKey, err := secp256k1.ParsePubKey(pubKeyBytes)
 	if err != nil {
 		return false
 	}
+	chainCodeBytes, err := hex.DecodeString(strings.TrimPrefix(chainCodeHex, "0x"))
+	if err != nil || len(chainCodeBytes) != 32 {
+		return false
+	}
+	root := &bip32.ExtendedPublicKey{Pub: rootPubKey}
+	copy(root.ChainCode[:], chainCodeBytes)
+	ethKey, err := root.DerivePath(bip32.ETHPath)
+	if err != nil {
+		return false
+	}
+
 	sigBytes, err := hex.DecodeString(strings.TrimPrefix(signatureHex, "0x"))
 	if err != nil {
 		return false
@@ -98,7 +142,7 @@ func verifySignature(publicKey string, nonce int64, signatureHex string) bool {
 		return false
 	}
 	hash := sha256.Sum256([]byte(strconv.FormatInt(nonce, 10)))
-	return sig.Verify(hash[:], pubKey)
+	return sig.Verify(hash[:], ethKey.Pub)
 }
 
 func (a *AuthService) ValidateToken(tokenStr string) (*Claims, error) {
@@ -115,7 +159,9 @@ func (a *AuthService) ValidateToken(tokenStr string) (*Claims, error) {
 	return claims, nil
 }
 
-// RequireAuth is Echo middleware that validates the Bearer JWT and stores
+// RequireAuth is Echo middleware that validates the Bearer JWT, checks it
+// against its vault_tokens record (rejecting tokens that were never issued
+// by this server, e.g. a stale DB, or have since been revoked), and stores
 // the resulting Claims on the context (key "claims") for handlers to use.
 func (a *AuthService) RequireAuth(next echo.HandlerFunc) echo.HandlerFunc {
 	return func(c echo.Context) error {
@@ -128,6 +174,16 @@ func (a *AuthService) RequireAuth(next echo.HandlerFunc) echo.HandlerFunc {
 		if err != nil {
 			return echo.NewHTTPError(401, "invalid or expired token")
 		}
+
+		tok, err := vaulttoken.Touch(c.Request().Context(), a.pool, claims.ID)
+		if err != nil {
+			log.Printf("auth: check token: %v", err)
+			return echo.NewHTTPError(500, "internal error")
+		}
+		if tok == nil || tok.IsRevoked() || tok.ExpiresAt.Before(time.Now()) {
+			return echo.NewHTTPError(401, "invalid or expired token")
+		}
+
 		c.Set("claims", claims)
 		return next(c)
 	}
