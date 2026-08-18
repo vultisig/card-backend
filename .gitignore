@@ -5,6 +5,7 @@
 # Env & secrets
 .env
 .env.*
+config.json
 
 # IDE
 .idea/
@@ -13,3 +14,6 @@
 # OS
 .DS_Store
 /cmd/server/card-backend
+/cmd/vaultkey/vaultkey
+/cmd/server/server
+/cmd/vaultkey/seed.txt
