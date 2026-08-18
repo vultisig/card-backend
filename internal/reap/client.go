@@ -10,7 +10,10 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
+	"strings"
 	"time"
+
+	"github.com/vultisig/card-backend/internal/statsd"
 )
 
 const apiVersion = "2025-02-14"
@@ -31,16 +34,17 @@ type Client struct {
 	baseURL string
 	apiKey  string
 	http    *http.Client
+	stats   *statsd.Client
 }
 
 // NewClient builds a REAP API client. Any env value other than EnvProd
-// resolves to the sandbox base URL.
-func NewClient(env, apiKey string) *Client {
+// resolves to the sandbox base URL. stats may be nil (metrics are a no-op).
+func NewClient(env, apiKey string, stats *statsd.Client) *Client {
 	baseURL := sandboxBaseURL
 	if env == EnvProd {
 		baseURL = prodBaseURL
 	}
-	return &Client{baseURL: baseURL, apiKey: apiKey, http: &http.Client{Timeout: requestTimeout}}
+	return &Client{baseURL: baseURL, apiKey: apiKey, http: &http.Client{Timeout: requestTimeout}, stats: stats}
 }
 
 type TermsAcceptance struct {
@@ -681,7 +685,14 @@ func (c *Client) simulateCardTransaction(ctx context.Context, path string, req S
 	return c.do(ctx, http.MethodPost, path, bytes.NewReader(b))
 }
 
-func (c *Client) do(ctx context.Context, method, path string, body io.Reader, opts ...func(*http.Request)) (int, []byte, error) {
+func (c *Client) do(ctx context.Context, method, path string, body io.Reader, opts ...func(*http.Request)) (status int, respBody []byte, err error) {
+	start := time.Now()
+	defer func() {
+		tags := []string{"method:" + method, "path:" + metricPath(path), "status:" + strconv.Itoa(status)}
+		c.stats.Count("reap.request.count", 1, tags...)
+		c.stats.Timing("reap.request.duration", time.Since(start), tags...)
+	}()
+
 	req, err := http.NewRequestWithContext(ctx, method, c.baseURL+path, body)
 	if err != nil {
 		return 0, nil, err
@@ -701,9 +712,26 @@ func (c *Client) do(ctx context.Context, method, path string, body io.Reader, op
 	}
 	defer func() { _ = resp.Body.Close() }()
 
-	respBody, err := io.ReadAll(resp.Body)
+	respBody, err = io.ReadAll(resp.Body)
 	if err != nil {
 		return 0, nil, err
 	}
 	return resp.StatusCode, respBody, nil
+}
+
+// metricPath collapses REAP resource IDs in path to ":id" for use as a
+// metric tag: REAP IDs are UUIDs/alphanumeric and always contain a digit,
+// while static path segments (accounts, cards, balance, freeze, ...) never
+// do — except REAP's own literal "3ds" term, stripped before the check —
+// so this keeps tag cardinality bounded without a per-call route table.
+// Any query string is dropped entirely, for the same reason.
+func metricPath(path string) string {
+	path, _, _ = strings.Cut(path, "?")
+	segments := strings.Split(path, "/")
+	for i, seg := range segments {
+		if strings.ContainsAny(strings.ReplaceAll(seg, "3ds", ""), "0123456789") {
+			segments[i] = ":id"
+		}
+	}
+	return strings.Join(segments, "/")
 }

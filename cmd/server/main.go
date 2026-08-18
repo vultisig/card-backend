@@ -14,6 +14,7 @@ import (
 	"github.com/vultisig/card-backend/internal/db"
 	"github.com/vultisig/card-backend/internal/reap"
 	"github.com/vultisig/card-backend/internal/service"
+	"github.com/vultisig/card-backend/internal/statsd"
 )
 
 // Above the REAP client's request timeout, so an in-flight proxy call can finish.
@@ -44,8 +45,15 @@ func main() {
 		log.Fatalf("db migrate: %v", err)
 	}
 
+	stats, err := statsd.New(cfg.StatsDAddr, "card_backend.")
+	if err != nil {
+		// Metrics are non-critical: dialing UDP only fails on a malformed
+		// address, and the server should still serve requests without them.
+		log.Printf("statsd: %v (metrics disabled)", err)
+	}
+
 	authService := service.NewAuthService(cfg.JWTSecret, pool)
-	reapClient := reap.NewClient(cfg.ReapEnv, cfg.ReapAPIKey)
+	reapClient := reap.NewClient(cfg.ReapEnv, cfg.ReapAPIKey, stats)
 	userService := service.NewUserService(pool, reapClient)
 	accountService := service.NewAccountService(pool, reapClient)
 	cardService := service.NewCardService(pool, reapClient)
@@ -56,7 +64,7 @@ func main() {
 	fraudAlertService := service.NewFraudAlertService(pool, reapClient)
 	simulationService := service.NewSimulationService(pool, reapClient)
 	webhookService := service.NewWebhookService(pool, cfg.ReapWebhookSecret)
-	srv := NewServer(pool, authService, userService, accountService, cardService, cardShipmentService, cardDesignService, cardTransactionService, activityService, fraudAlertService, simulationService, webhookService, cfg.ReapEnv)
+	srv := NewServer(pool, stats, authService, userService, accountService, cardService, cardShipmentService, cardDesignService, cardTransactionService, activityService, fraudAlertService, simulationService, webhookService, cfg.ReapEnv)
 
 	log.Printf("card-backend starting on port %s", cfg.Port)
 

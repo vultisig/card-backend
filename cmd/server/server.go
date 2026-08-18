@@ -16,11 +16,13 @@ import (
 	"github.com/vultisig/card-backend/internal/reap"
 	"github.com/vultisig/card-backend/internal/reapmapping"
 	"github.com/vultisig/card-backend/internal/service"
+	"github.com/vultisig/card-backend/internal/statsd"
 )
 
 type Server struct {
 	echo                   *echo.Echo
 	pool                   *pgxpool.Pool
+	stats                  *statsd.Client
 	authService            *service.AuthService
 	userService            *service.UserService
 	accountService         *service.AccountService
@@ -34,10 +36,11 @@ type Server struct {
 	webhookService         *service.WebhookService
 }
 
-func NewServer(pool *pgxpool.Pool, authService *service.AuthService, userService *service.UserService, accountService *service.AccountService, cardService *service.CardService, cardShipmentService *service.CardShipmentService, cardDesignService *service.CardDesignService, cardTransactionService *service.CardTransactionService, activityService *service.ActivityService, fraudAlertService *service.FraudAlertService, simulationService *service.SimulationService, webhookService *service.WebhookService, reapEnv string) *Server {
+func NewServer(pool *pgxpool.Pool, stats *statsd.Client, authService *service.AuthService, userService *service.UserService, accountService *service.AccountService, cardService *service.CardService, cardShipmentService *service.CardShipmentService, cardDesignService *service.CardDesignService, cardTransactionService *service.CardTransactionService, activityService *service.ActivityService, fraudAlertService *service.FraudAlertService, simulationService *service.SimulationService, webhookService *service.WebhookService, reapEnv string) *Server {
 	s := &Server{
 		echo:                   echo.New(),
 		pool:                   pool,
+		stats:                  stats,
 		authService:            authService,
 		userService:            userService,
 		accountService:         accountService,
@@ -53,11 +56,25 @@ func NewServer(pool *pgxpool.Pool, authService *service.AuthService, userService
 
 	s.echo.Use(middleware.Recover())
 	s.echo.Use(middleware.RequestLoggerWithConfig(middleware.RequestLoggerConfig{
-		LogStatus: true,
-		LogURI:    true,
-		LogMethod: true,
+		LogStatus:    true,
+		LogURIPath:   true,
+		LogMethod:    true,
+		LogRoutePath: true,
+		LogLatency:   true,
 		LogValuesFunc: func(_ echo.Context, v middleware.RequestLoggerValues) error {
-			log.Printf("%s %s %d", v.Method, v.URI, v.Status)
+			// URIPath, not URI: URI is req.RequestURI verbatim, which
+			// includes the query string — logging it risks leaking
+			// anything passed as a query param (e.g. a future token).
+			log.Printf("%s %s %d", v.Method, v.URIPath, v.Status)
+			// RoutePath (e.g. "/card/:id"), not URI, keeps tag cardinality
+			// bounded — URI would mint a new tag value per card/account ID.
+			route := v.RoutePath
+			if route == "" {
+				route = "unmatched"
+			}
+			tags := []string{"method:" + v.Method, "route:" + route, "status:" + strconv.Itoa(v.Status)}
+			s.stats.Count("http.request.count", 1, tags...)
+			s.stats.Timing("http.request.duration", v.Latency, tags...)
 			return nil
 		},
 	}))

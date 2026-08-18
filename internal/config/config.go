@@ -18,12 +18,17 @@ type Config struct {
 	// endpoint is registered (POST /webhooks), used to verify the
 	// X-Reap-Webhook-Signature header on incoming webhook deliveries.
 	ReapWebhookSecret string
+	// StatsDAddr is the host:port of a DogStatsD agent (UDP). Defaults to
+	// the standard local Datadog agent address; metrics are silently
+	// dropped if nothing is listening there.
+	StatsDAddr string
 }
 
 func Load() Config {
 	viper.SetDefault("port", "8080")
 	viper.SetDefault("database_url", "postgres://postgres:postgres@localhost:5432/card_backend?sslmode=disable")
 	viper.SetDefault("reap_env", "sandbox")
+	viper.SetDefault("statsd_addr", "127.0.0.1:8125")
 	viper.AutomaticEnv()
 
 	viper.SetConfigName("config")
@@ -42,5 +47,6 @@ func Load() Config {
 		ReapAPIKey:        viper.GetString("reap_api_key"),
 		ReapEnv:           viper.GetString("reap_env"),
 		ReapWebhookSecret: viper.GetString("reap_webhook_secret"),
+		StatsDAddr:        viper.GetString("statsd_addr"),
 	}
 }

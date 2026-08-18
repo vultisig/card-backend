@@ -737,10 +737,28 @@ func TestClientSimulation(t *testing.T) {
 }
 
 func TestNewClientBaseURL(t *testing.T) {
-	if got := NewClient(EnvProd, "k").baseURL; got != prodBaseURL {
+	if got := NewClient(EnvProd, "k", nil).baseURL; got != prodBaseURL {
 		t.Errorf("prod baseURL = %q, want %q", got, prodBaseURL)
 	}
-	if got := NewClient("anything-else", "k").baseURL; got != sandboxBaseURL {
+	if got := NewClient("anything-else", "k", nil).baseURL; got != sandboxBaseURL {
 		t.Errorf("default baseURL = %q, want %q", got, sandboxBaseURL)
+	}
+}
+
+func TestMetricPath(t *testing.T) {
+	cases := map[string]string{
+		"/users/":                           "/users/",
+		"/users/user-1":                     "/users/:id",
+		"/accounts/acc_9f3b/balance":        "/accounts/:id/balance",
+		"/card/card-1/3ds-challenge-method": "/card/:id/3ds-challenge-method",
+		"/card-3ds-challenges/challenge-1":  "/card-3ds-challenges/:id",
+		"/simulation/card-transactions/authorization-with-3ds": "/simulation/card-transactions/authorization-with-3ds",
+		"/accounts/?ownerId=user-1&limit=10":                   "/accounts/",
+		"/card-designs":                                        "/card-designs",
+	}
+	for path, want := range cases {
+		if got := metricPath(path); got != want {
+			t.Errorf("metricPath(%q) = %q, want %q", path, got, want)
+		}
 	}
 }
