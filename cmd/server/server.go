@@ -57,12 +57,15 @@ func NewServer(pool *pgxpool.Pool, stats *statsd.Client, authService *service.Au
 	s.echo.Use(middleware.Recover())
 	s.echo.Use(middleware.RequestLoggerWithConfig(middleware.RequestLoggerConfig{
 		LogStatus:    true,
-		LogURI:       true,
+		LogURIPath:   true,
 		LogMethod:    true,
 		LogRoutePath: true,
 		LogLatency:   true,
 		LogValuesFunc: func(_ echo.Context, v middleware.RequestLoggerValues) error {
-			log.Printf("%s %s %d", v.Method, v.URI, v.Status)
+			// URIPath, not URI: URI is req.RequestURI verbatim, which
+			// includes the query string — logging it risks leaking
+			// anything passed as a query param (e.g. a future token).
+			log.Printf("%s %s %d", v.Method, v.URIPath, v.Status)
 			// RoutePath (e.g. "/card/:id"), not URI, keeps tag cardinality
 			// bounded — URI would mint a new tag value per card/account ID.
 			route := v.RoutePath

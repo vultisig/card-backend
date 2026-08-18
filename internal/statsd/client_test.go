@@ -45,6 +45,20 @@ func TestClientCountAndTiming(t *testing.T) {
 	}
 }
 
+func TestClientTimingSubMillisecond(t *testing.T) {
+	conn, addr := listen(t)
+	c, err := New(addr, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Milliseconds() alone would truncate this to 0, losing the measurement.
+	c.Timing("fast", 500*time.Microsecond)
+	if got, want := recv(t, conn), "fast:0.5|ms"; got != want {
+		t.Errorf("sub-millisecond Timing wire format = %q, want %q", got, want)
+	}
+}
+
 func TestClientNoTagsOmitsHash(t *testing.T) {
 	conn, addr := listen(t)
 	c, err := New(addr, "")
