@@ -22,7 +22,7 @@ import (
 	"github.com/vultisig/card-backend/internal/vaulttoken"
 )
 
-const accessTokenDuration = 24 * time.Hour
+const accessTokenDuration = 30 * time.Minute
 
 var (
 	ErrInvalidSignature = errors.New("invalid signature")
