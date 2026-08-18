@@ -231,7 +231,8 @@ func (s *Server) createUser(c echo.Context) error {
 		TermsAcceptanceVersion string `json:"termsAcceptanceVersion"`
 	}
 	if err := c.Bind(&req); err != nil || req.Email == "" || req.PhoneNumber == "" || req.TermsAcceptanceVersion == "" {
-		log.Printf("createUser: invalid request: %v, req: %+v", err, req)
+		log.Printf("createUser: invalid request: bind_err=%v email_set=%t phone_set=%t terms_set=%t",
+			err, req.Email != "", req.PhoneNumber != "", req.TermsAcceptanceVersion != "")
 		return c.JSON(http.StatusBadRequest, echo.Map{"error": "invalid request"})
 	}
 
