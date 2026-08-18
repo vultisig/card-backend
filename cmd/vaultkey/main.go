@@ -59,6 +59,29 @@ func ethAddress(pub *secp256k1.PublicKey) string {
 	return "0x" + string(checksummed)
 }
 
+// personalSignHash computes the EIP-191 "personal_sign" hash of msg:
+// keccak256("\x19Ethereum Signed Message:\n" + len(msg) + msg). This is
+// what ecrecover-based verifiers (REAP's EVM signer proof included) expect
+// — not a plain sha256 of the message.
+func personalSignHash(msg string) [32]byte {
+	prefixed := "\x19Ethereum Signed Message:\n" + strconv.Itoa(len(msg)) + msg
+	keccak := sha3.NewLegacyKeccak256()
+	keccak.Write([]byte(prefixed))
+	var hash [32]byte
+	copy(hash[:], keccak.Sum(nil))
+	return hash
+}
+
+// signPersonal signs hash with priv and returns the 65-byte Ethereum
+// signature format ecrecover expects: r(32) || s(32) || v(1), v = 27/28.
+func signPersonal(priv *secp256k1.PrivateKey, hash [32]byte) []byte {
+	compact := ecdsa.SignCompact(priv, hash[:], false) // [recovery(1), r(32), s(32)]
+	sig := make([]byte, 65)
+	copy(sig[:64], compact[1:])
+	sig[64] = compact[0]
+	return sig
+}
+
 // solanaExtendedKey is a SLIP-0010 ed25519 extended key. Unlike secp256k1,
 // ed25519 has no public-parent-key-to-public-child-key derivation, so SLIP-10
 // only defines (and this only implements) hardened derivation.
@@ -213,13 +236,13 @@ func main() {
 		if !json.Valid([]byte(msg)) {
 			log.Fatal("message is not valid JSON")
 		}
-		hash := sha256.Sum256([]byte(msg))
-		ethSigHex := hex.EncodeToString(ecdsa.Sign(eth.Priv, hash[:]).Serialize())
+		ethHash := personalSignHash(msg)
+		ethSigHex := "0x" + hex.EncodeToString(signPersonal(eth.Priv, ethHash))
 		solanaSig := base58Encode(ed25519.Sign(solanaPriv, []byte(msg)))
 		fmt.Println()
 		field("Message", msg)
-		field("Message SHA-256", hex.EncodeToString(hash[:]))
-		field("ETH Signature (DER)", ethSigHex)
-		field("Solana Signature", solanaSig)
+		field("EIP-191 Hash", hex.EncodeToString(ethHash[:]))
+		field("ETH Signature", ethSigHex+" (r||s||v, for ecrecover — e.g. REAP's Signers.evm)")
+		field("Solana Signature", solanaSig+" (base58, for REAP's Signers.svm)")
 	}
 }
