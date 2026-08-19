@@ -3,6 +3,7 @@ package reapmapping
 import (
 	"context"
 	"errors"
+	"strings"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -67,16 +68,22 @@ func SetReapUserID(ctx context.Context, db Querier, publicKey, reapUserID string
 
 // ClaimNonce atomically advances publicKey's nonce from expected to
 // expected+1, creating the mapping row on first use, so the same signed
-// nonce can never be replayed. It also (re)records hexChainCode, the chain
-// code the client authenticated with, since it's constant per vault.
-// Returns false if the nonce didn't match (already used, or wrong value).
+// nonce can never be replayed. It also records hexChainCode, the chain code
+// the client authenticated with, on first use; since it's constant per
+// vault, a claim whose hexChainCode doesn't match an already-recorded value
+// fails (like a nonce mismatch) instead of silently overwriting it. Returns
+// false if the nonce or chain code didn't match.
 func ClaimNonce(ctx context.Context, db Querier, publicKey string, expected int64, hexChainCode string) (bool, error) {
+	hexChainCode = strings.ToLower(strings.TrimPrefix(hexChainCode, "0x"))
 	tag, err := db.Exec(ctx, `
 		INSERT INTO vultisig_reap_mappings (public_key_ecdsa, nonce, hex_chain_code, updated_at, last_used_at)
 		VALUES ($1, $2 + 1, $3, now(), now())
 		ON CONFLICT (public_key_ecdsa) DO UPDATE
-			SET nonce = vultisig_reap_mappings.nonce + 1, hex_chain_code = $3, updated_at = now(), last_used_at = now()
+			SET nonce = vultisig_reap_mappings.nonce + 1,
+			    hex_chain_code = COALESCE(vultisig_reap_mappings.hex_chain_code, $3),
+			    updated_at = now(), last_used_at = now()
 			WHERE vultisig_reap_mappings.nonce = $2
+			  AND (vultisig_reap_mappings.hex_chain_code IS NULL OR vultisig_reap_mappings.hex_chain_code = $3)
 	`, publicKey, expected, hexChainCode)
 	if err != nil {
 		return false, err
