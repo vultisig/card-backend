@@ -64,7 +64,7 @@ func (a *AuthService) Authenticate(ctx context.Context, publicKey string, chainC
 		return "", ErrInvalidSignature
 	}
 
-	claimed, err := reapmapping.ClaimNonce(ctx, a.pool, publicKey, nonce)
+	claimed, err := reapmapping.ClaimNonce(ctx, a.pool, publicKey, nonce, chainCodeHex)
 	if err != nil {
 		return "", err
 	}
