@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/url"
@@ -75,7 +76,7 @@ func (c *Client) CreateUser(ctx context.Context, req CreateUserRequest) (status 
 // and status code as-is (including non-2xx error bodies) so callers can
 // pass them straight through to their own client.
 func (c *Client) GetUser(ctx context.Context, id string) (status int, body []byte, err error) {
-	return c.do(ctx, http.MethodGet, "/users/"+id, nil)
+	return c.do(ctx, http.MethodGet, pathf("/users/%s", id), nil)
 }
 
 // UpdateEmail calls PUT /users/{id}/email. On success REAP returns 204 with
@@ -87,7 +88,7 @@ func (c *Client) UpdateEmail(ctx context.Context, id, email string) (status int,
 	if err != nil {
 		return 0, nil, err
 	}
-	return c.do(ctx, http.MethodPut, "/users/"+id+"/email", bytes.NewReader(b))
+	return c.do(ctx, http.MethodPut, pathf("/users/%s/email", id), bytes.NewReader(b))
 }
 
 // UpdatePhoneNumber calls PUT /users/{id}/phone. On success REAP returns 204
@@ -99,7 +100,7 @@ func (c *Client) UpdatePhoneNumber(ctx context.Context, id, phoneNumber string) 
 	if err != nil {
 		return 0, nil, err
 	}
-	return c.do(ctx, http.MethodPut, "/users/"+id+"/phone", bytes.NewReader(b))
+	return c.do(ctx, http.MethodPut, pathf("/users/%s/phone", id), bytes.NewReader(b))
 }
 
 // AdvanceUserApplication calls POST /users/{id}/application, forwarding
@@ -110,7 +111,7 @@ func (c *Client) UpdatePhoneNumber(ctx context.Context, id, phoneNumber string) 
 // typed struct. It returns REAP's raw JSON response body and status code
 // as-is.
 func (c *Client) AdvanceUserApplication(ctx context.Context, id string, body []byte, idempotencyKey string) (status int, respBody []byte, err error) {
-	return c.do(ctx, http.MethodPost, "/users/"+id+"/application", bytes.NewReader(body), func(r *http.Request) {
+	return c.do(ctx, http.MethodPost, pathf("/users/%s/application", id), bytes.NewReader(body), func(r *http.Request) {
 		if idempotencyKey != "" {
 			r.Header.Set("Idempotency-Key", idempotencyKey)
 		}
@@ -160,19 +161,19 @@ func (c *Client) GenerateSignerMessage(ctx context.Context) (status int, body []
 // body and status code as-is (including non-2xx error bodies) so callers can
 // pass them straight through to their own client.
 func (c *Client) GetAccount(ctx context.Context, id string) (status int, body []byte, err error) {
-	return c.do(ctx, http.MethodGet, "/accounts/"+id, nil)
+	return c.do(ctx, http.MethodGet, pathf("/accounts/%s", id), nil)
 }
 
 // GetAccountBalance calls GET /accounts/{id}/balance. It returns REAP's raw
 // JSON response body and status code as-is.
 func (c *Client) GetAccountBalance(ctx context.Context, id string) (status int, body []byte, err error) {
-	return c.do(ctx, http.MethodGet, "/accounts/"+id+"/balance", nil)
+	return c.do(ctx, http.MethodGet, pathf("/accounts/%s/balance", id), nil)
 }
 
 // GetAccountAssets calls GET /accounts/{id}/assets. It returns REAP's raw
 // JSON response body and status code as-is.
 func (c *Client) GetAccountAssets(ctx context.Context, id string) (status int, body []byte, err error) {
-	return c.do(ctx, http.MethodGet, "/accounts/"+id+"/assets", nil)
+	return c.do(ctx, http.MethodGet, pathf("/accounts/%s/assets", id), nil)
 }
 
 // ListAccounts calls GET /accounts/, filtered to ownerID. limit <= 0 and an
@@ -222,13 +223,13 @@ func (c *Client) ListCards(ctx context.Context, query url.Values) (status int, b
 // GetCard calls GET /cards/{id}. It returns REAP's raw JSON response body
 // and status code as-is (including non-2xx error bodies).
 func (c *Client) GetCard(ctx context.Context, id string) (status int, body []byte, err error) {
-	return c.do(ctx, http.MethodGet, "/cards/"+id, nil)
+	return c.do(ctx, http.MethodGet, pathf("/cards/%s", id), nil)
 }
 
 // DeleteCard calls DELETE /cards/{id}. On success REAP returns 204 with an
 // empty body; on error it returns REAP's raw JSON error body as-is.
 func (c *Client) DeleteCard(ctx context.Context, id string) (status int, body []byte, err error) {
-	return c.do(ctx, http.MethodDelete, "/cards/"+id, nil)
+	return c.do(ctx, http.MethodDelete, pathf("/cards/%s", id), nil)
 }
 
 // UpdateCardPin calls PUT /cards/{id}/pin. On success REAP returns 204 with
@@ -240,19 +241,19 @@ func (c *Client) UpdateCardPin(ctx context.Context, id, pin string) (status int,
 	if err != nil {
 		return 0, nil, err
 	}
-	return c.do(ctx, http.MethodPut, "/cards/"+id+"/pin", bytes.NewReader(b))
+	return c.do(ctx, http.MethodPut, pathf("/cards/%s/pin", id), bytes.NewReader(b))
 }
 
 // FreezeCard calls POST /cards/{id}/freeze. It returns REAP's raw JSON
 // response body and status code as-is.
 func (c *Client) FreezeCard(ctx context.Context, id string) (status int, body []byte, err error) {
-	return c.do(ctx, http.MethodPost, "/cards/"+id+"/freeze", nil)
+	return c.do(ctx, http.MethodPost, pathf("/cards/%s/freeze", id), nil)
 }
 
 // UnfreezeCard calls POST /cards/{id}/unfreeze. It returns REAP's raw JSON
 // response body and status code as-is.
 func (c *Client) UnfreezeCard(ctx context.Context, id string) (status int, body []byte, err error) {
-	return c.do(ctx, http.MethodPost, "/cards/"+id+"/unfreeze", nil)
+	return c.do(ctx, http.MethodPost, pathf("/cards/%s/unfreeze", id), nil)
 }
 
 // RevealCardDetails calls POST /cards/{id}/reveal. The returned revealUrl is
@@ -266,7 +267,7 @@ func (c *Client) RevealCardDetails(ctx context.Context, id, stylesheetURL string
 	if err != nil {
 		return 0, nil, err
 	}
-	return c.do(ctx, http.MethodPost, "/cards/"+id+"/reveal", bytes.NewReader(b))
+	return c.do(ctx, http.MethodPost, pathf("/cards/%s/reveal", id), bytes.NewReader(b))
 }
 
 // UpdateCard3DSChallengeMethod calls PUT /cards/{id}/3ds-challenge-method.
@@ -279,7 +280,7 @@ func (c *Client) UpdateCard3DSChallengeMethod(ctx context.Context, id, method st
 	if err != nil {
 		return 0, nil, err
 	}
-	return c.do(ctx, http.MethodPut, "/cards/"+id+"/3ds-challenge-method", bytes.NewReader(b))
+	return c.do(ctx, http.MethodPut, pathf("/cards/%s/3ds-challenge-method", id), bytes.NewReader(b))
 }
 
 // ActivatePhysicalCard calls POST /cards/{id}/activate. On success REAP
@@ -292,13 +293,13 @@ func (c *Client) ActivatePhysicalCard(ctx context.Context, id, activationCode st
 	if err != nil {
 		return 0, nil, err
 	}
-	return c.do(ctx, http.MethodPost, "/cards/"+id+"/activate", bytes.NewReader(b))
+	return c.do(ctx, http.MethodPost, pathf("/cards/%s/activate", id), bytes.NewReader(b))
 }
 
 // GetCardActivationCode calls GET /cards/{id}/activation-code. It returns
 // REAP's raw JSON response body and status code as-is.
 func (c *Client) GetCardActivationCode(ctx context.Context, id string) (status int, body []byte, err error) {
-	return c.do(ctx, http.MethodGet, "/cards/"+id+"/activation-code", nil)
+	return c.do(ctx, http.MethodGet, pathf("/cards/%s/activation-code", id), nil)
 }
 
 // PushProvisionCard calls POST /cards/{id}/push-provisioning, forwarding
@@ -314,7 +315,7 @@ func (c *Client) PushProvisionCard(ctx context.Context, id, provider, walletAcco
 	if err != nil {
 		return 0, nil, err
 	}
-	return c.do(ctx, http.MethodPost, "/cards/"+id+"/push-provisioning", bytes.NewReader(b), func(r *http.Request) {
+	return c.do(ctx, http.MethodPost, pathf("/cards/%s/push-provisioning", id), bytes.NewReader(b), func(r *http.Request) {
 		if idempotencyKey != "" {
 			r.Header.Set("Idempotency-Key", idempotencyKey)
 		}
@@ -330,13 +331,13 @@ func (c *Client) RespondToCard3DSChallenge(ctx context.Context, id string, appro
 	if err != nil {
 		return 0, nil, err
 	}
-	return c.do(ctx, http.MethodPost, "/card-3ds-challenges/"+id+"/respond", bytes.NewReader(b))
+	return c.do(ctx, http.MethodPost, pathf("/card-3ds-challenges/%s/respond", id), bytes.NewReader(b))
 }
 
 // GetCard3DSChallenge calls GET /card-3ds-challenges/{id}. It returns REAP's
 // raw JSON response body and status code as-is.
 func (c *Client) GetCard3DSChallenge(ctx context.Context, id string) (status int, body []byte, err error) {
-	return c.do(ctx, http.MethodGet, "/card-3ds-challenges/"+id, nil)
+	return c.do(ctx, http.MethodGet, pathf("/card-3ds-challenges/%s", id), nil)
 }
 
 type CardShippingAddress struct {
@@ -400,14 +401,14 @@ func (c *Client) ListCardShipments(ctx context.Context, query url.Values) (statu
 // GetCardShipment calls GET /card-shipments/{id}. It returns REAP's raw
 // JSON response body and status code as-is.
 func (c *Client) GetCardShipment(ctx context.Context, id string) (status int, body []byte, err error) {
-	return c.do(ctx, http.MethodGet, "/card-shipments/"+id, nil)
+	return c.do(ctx, http.MethodGet, pathf("/card-shipments/%s", id), nil)
 }
 
 // DeleteCardShipment calls DELETE /card-shipments/{id}. Only DRAFT
 // shipments can be deleted. On success REAP returns 204 with an empty body;
 // on error it returns REAP's raw JSON error body as-is.
 func (c *Client) DeleteCardShipment(ctx context.Context, id string) (status int, body []byte, err error) {
-	return c.do(ctx, http.MethodDelete, "/card-shipments/"+id, nil)
+	return c.do(ctx, http.MethodDelete, pathf("/card-shipments/%s", id), nil)
 }
 
 // UpdateCardShipment calls PATCH /card-shipments/{id}, updating the
@@ -418,7 +419,7 @@ func (c *Client) UpdateCardShipment(ctx context.Context, id string, req UpdateCa
 	if err != nil {
 		return 0, nil, err
 	}
-	return c.do(ctx, http.MethodPatch, "/card-shipments/"+id, bytes.NewReader(b))
+	return c.do(ctx, http.MethodPatch, pathf("/card-shipments/%s", id), bytes.NewReader(b))
 }
 
 // AddCardToShipment calls POST /card-shipments/{id}/cards, appending a card
@@ -429,14 +430,14 @@ func (c *Client) AddCardToShipment(ctx context.Context, id string, member CardSh
 	if err != nil {
 		return 0, nil, err
 	}
-	return c.do(ctx, http.MethodPost, "/card-shipments/"+id+"/cards", bytes.NewReader(b))
+	return c.do(ctx, http.MethodPost, pathf("/card-shipments/%s/cards", id), bytes.NewReader(b))
 }
 
 // RemoveCardFromShipment calls DELETE /card-shipments/{id}/cards/{memberId},
 // removing a card from a DRAFT shipment. It returns REAP's raw JSON
 // response body and status code as-is.
 func (c *Client) RemoveCardFromShipment(ctx context.Context, id, memberID string) (status int, body []byte, err error) {
-	return c.do(ctx, http.MethodDelete, "/card-shipments/"+id+"/cards/"+memberID, nil)
+	return c.do(ctx, http.MethodDelete, pathf("/card-shipments/%s/cards/%s", id, memberID), nil)
 }
 
 // SubmitCardShipment calls POST /card-shipments/{id}/submit, forwarding
@@ -446,7 +447,7 @@ func (c *Client) RemoveCardFromShipment(ctx context.Context, id, memberID string
 // and status code as-is (REAP returns 207 when some cards in the shipment
 // are rejected).
 func (c *Client) SubmitCardShipment(ctx context.Context, id, idempotencyKey string) (status int, body []byte, err error) {
-	return c.do(ctx, http.MethodPost, "/card-shipments/"+id+"/submit", nil, func(r *http.Request) {
+	return c.do(ctx, http.MethodPost, pathf("/card-shipments/%s/submit", id), nil, func(r *http.Request) {
 		r.Header.Set("Idempotency-Key", idempotencyKey)
 	})
 }
@@ -460,13 +461,13 @@ func (c *Client) ListCardDesigns(ctx context.Context, query url.Values) (status 
 // GetCardDesign calls GET /card-designs/{id}. It returns REAP's raw JSON
 // response body and status code as-is.
 func (c *Client) GetCardDesign(ctx context.Context, id string) (status int, body []byte, err error) {
-	return c.do(ctx, http.MethodGet, "/card-designs/"+id, nil)
+	return c.do(ctx, http.MethodGet, pathf("/card-designs/%s", id), nil)
 }
 
 // GetCardTransaction calls GET /card-transactions/{id}. It returns REAP's
 // raw JSON response body and status code as-is.
 func (c *Client) GetCardTransaction(ctx context.Context, id string) (status int, body []byte, err error) {
-	return c.do(ctx, http.MethodGet, "/card-transactions/"+id, nil)
+	return c.do(ctx, http.MethodGet, pathf("/card-transactions/%s", id), nil)
 }
 
 // ListActivities calls GET /activities/ with query forwarded as-is. It
@@ -510,7 +511,7 @@ func (c *Client) ReportFraud(ctx context.Context, req ReportFraudRequest, idempo
 // GetFraudAlert calls GET /fraud-alerts/{id}. It returns REAP's raw JSON
 // response body and status code as-is.
 func (c *Client) GetFraudAlert(ctx context.Context, id string) (status int, body []byte, err error) {
-	return c.do(ctx, http.MethodGet, "/fraud-alerts/"+id, nil)
+	return c.do(ctx, http.MethodGet, pathf("/fraud-alerts/%s", id), nil)
 }
 
 // RespondToFraudAlert calls POST /fraud-alerts/{id}/respond, forwarding
@@ -522,7 +523,7 @@ func (c *Client) RespondToFraudAlert(ctx context.Context, id string, req Respond
 	if err != nil {
 		return 0, nil, err
 	}
-	return c.do(ctx, http.MethodPost, "/fraud-alerts/"+id+"/respond", bytes.NewReader(b), func(r *http.Request) {
+	return c.do(ctx, http.MethodPost, pathf("/fraud-alerts/%s/respond", id), bytes.NewReader(b), func(r *http.Request) {
 		if idempotencyKey != "" {
 			r.Header.Set("Idempotency-Key", idempotencyKey)
 		}
@@ -541,7 +542,7 @@ func (c *Client) SimulateUserApplicationStatus(ctx context.Context, userID, targ
 	if err != nil {
 		return 0, nil, err
 	}
-	return c.do(ctx, http.MethodPost, "/simulation/users/"+userID+"/application", bytes.NewReader(b))
+	return c.do(ctx, http.MethodPost, pathf("/simulation/users/%s/application", userID), bytes.NewReader(b))
 }
 
 type CompanyAddress struct {
@@ -576,7 +577,7 @@ func (c *Client) SimulateCompanyStatus(ctx context.Context, companyID string, re
 	if err != nil {
 		return 0, nil, err
 	}
-	return c.do(ctx, http.MethodPost, "/simulation/companies/"+companyID+"/status", bytes.NewReader(b))
+	return c.do(ctx, http.MethodPost, pathf("/simulation/companies/%s/status", companyID), bytes.NewReader(b))
 }
 
 // SimulateAccountStatus calls POST /simulation/accounts/{id}/status
@@ -590,7 +591,7 @@ func (c *Client) SimulateAccountStatus(ctx context.Context, id, targetStatus str
 	if err != nil {
 		return 0, nil, err
 	}
-	return c.do(ctx, http.MethodPost, "/simulation/accounts/"+id+"/status", bytes.NewReader(b))
+	return c.do(ctx, http.MethodPost, pathf("/simulation/accounts/%s/status", id), bytes.NewReader(b))
 }
 
 // SimulateCardStatus calls POST /simulation/cards/{id}/status (sandbox-only,
@@ -604,7 +605,7 @@ func (c *Client) SimulateCardStatus(ctx context.Context, id, targetStatus string
 	if err != nil {
 		return 0, nil, err
 	}
-	return c.do(ctx, http.MethodPost, "/simulation/cards/"+id+"/status", bytes.NewReader(b))
+	return c.do(ctx, http.MethodPost, pathf("/simulation/cards/%s/status", id), bytes.NewReader(b))
 }
 
 type SimulationMerchant struct {
@@ -683,6 +684,17 @@ func (c *Client) simulateCardTransaction(ctx context.Context, path string, req S
 		return 0, nil, err
 	}
 	return c.do(ctx, http.MethodPost, path, bytes.NewReader(b))
+}
+
+// pathf builds a request path, URL-escaping every segment. Always use it for
+// caller-supplied ids instead of concatenating: an unescaped "?" or "/" lets
+// the caller steer a request we send under the project-wide API key.
+func pathf(format string, segments ...string) string {
+	escaped := make([]any, len(segments))
+	for i, seg := range segments {
+		escaped[i] = url.PathEscape(seg)
+	}
+	return fmt.Sprintf(format, escaped...)
 }
 
 func (c *Client) do(ctx context.Context, method, path string, body io.Reader, opts ...func(*http.Request)) (status int, respBody []byte, err error) {
