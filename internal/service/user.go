@@ -4,8 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-
-	"github.com/jackc/pgx/v5/pgxpool"
+	"log"
+	"time"
 
 	"github.com/vultisig/card-backend/internal/reap"
 	"github.com/vultisig/card-backend/internal/reapmapping"
@@ -22,52 +22,55 @@ var (
 	// ownership-checkable filter (e.g. accountId/cardId) and the caller
 	// supplied none, since forwarding the query unfiltered would return
 	// every vault's resources.
-	ErrMissingScopeFilter = errors.New("a scoping filter is required")
+	ErrMissingScopeFilter     = errors.New("a scoping filter is required")
+	ErrReapUserCreateInFlight = errors.New("reap user creation already in flight")
+)
+
+const (
+	// Well clear of the REAP client's 10s timeout, so only a dead request's claim is taken over.
+	reapUserCreateStale = time.Minute
+	releaseClaimTimeout = 5 * time.Second
 )
 
 type UserService struct {
-	pool *pgxpool.Pool
+	db   reapmapping.Querier
 	reap *reap.Client
 }
 
-func NewUserService(pool *pgxpool.Pool, reapClient *reap.Client) *UserService {
-	return &UserService{pool: pool, reap: reapClient}
+func NewUserService(db reapmapping.Querier, reapClient *reap.Client) *UserService {
+	return &UserService{db: db, reap: reapClient}
 }
 
 // CreateUser creates a REAP user for publicKey and records its REAP user ID
-// on publicKey's VultisigReapMapping. It returns ErrReapUserExists without
-// calling REAP if publicKey already has a REAP user ID.
+// on publicKey's VultisigReapMapping. ErrReapUserExists and
+// ErrReapUserCreateInFlight both return without reaching REAP; a non-2xx REAP
+// response is passed back unchanged.
 //
-// On a non-2xx REAP response, it returns REAP's status/body unchanged (no
-// error) so the caller can pass REAP's error straight through.
-//
-// The existence check, REAP call, and mapping write all happen while
-// holding a Postgres advisory lock on publicKey, so two concurrent requests
-// for the same vault can't both pass the check and each create a REAP user.
+// Concurrent creates are excluded by a claim on the mapping row rather than a
+// lock held across the call, so the round trip holds no pool connection.
 func (s *UserService) CreateUser(ctx context.Context, publicKey string, req reap.CreateUserRequest) (status int, body []byte, err error) {
-	tx, err := s.pool.Begin(ctx)
+	claimed, err := reapmapping.ClaimReapUserCreate(ctx, s.db, publicKey, reapUserCreateStale)
 	if err != nil {
 		return 0, nil, err
 	}
-	defer func() { _ = tx.Rollback(ctx) }()
-
-	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtext($1))`, publicKey); err != nil {
-		return 0, nil, err
-	}
-
-	existing, err := reapmapping.GetReapUserID(ctx, tx, publicKey)
-	if err != nil {
-		return 0, nil, err
-	}
-	if existing != "" {
-		return 0, nil, ErrReapUserExists
+	if !claimed {
+		existing, err := reapmapping.GetReapUserID(ctx, s.db, publicKey)
+		if err != nil {
+			return 0, nil, err
+		}
+		if existing != "" {
+			return 0, nil, ErrReapUserExists
+		}
+		return 0, nil, ErrReapUserCreateInFlight
 	}
 
 	status, body, err = s.reap.CreateUser(ctx, req)
 	if err != nil {
+		s.releaseCreateClaim(ctx, publicKey)
 		return 0, nil, err
 	}
 	if status < 200 || status >= 300 {
+		s.releaseCreateClaim(ctx, publicKey)
 		return status, body, nil
 	}
 
@@ -75,15 +78,29 @@ func (s *UserService) CreateUser(ctx context.Context, publicKey string, req reap
 		ID string `json:"id"`
 	}
 	if err := json.Unmarshal(body, &created); err != nil || created.ID == "" {
+		s.releaseCreateClaim(ctx, publicKey)
 		return 0, nil, errors.New("reap: create user response missing id")
 	}
-	if _, err := reapmapping.SetReapUserID(ctx, tx, publicKey, created.ID); err != nil {
+
+	// No release past this point: REAP has created the user, so a retry would make a second one.
+	ok, err := reapmapping.SetReapUserID(ctx, s.db, publicKey, created.ID)
+	if err != nil {
 		return 0, nil, err
 	}
-	if err := tx.Commit(ctx); err != nil {
-		return 0, nil, err
+	if !ok {
+		// The claim went stale and a second create won, leaving created.ID orphaned in REAP.
+		log.Printf("createUser: reap user %s created for %s but another ID was already recorded", created.ID, publicKey)
 	}
 	return status, body, nil
+}
+
+// Its own context: the request's is already cancelled when the client disconnected mid-call.
+func (s *UserService) releaseCreateClaim(ctx context.Context, publicKey string) {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), releaseClaimTimeout)
+	defer cancel()
+	if err := reapmapping.ReleaseReapUserCreate(ctx, s.db, publicKey); err != nil {
+		log.Printf("createUser: release create claim for %s: %v", publicKey, err)
+	}
 }
 
 // GetUser fetches the REAP user for publicKey. It returns ErrNoReapUser if
@@ -129,14 +146,14 @@ func (s *UserService) AdvanceUserApplication(ctx context.Context, publicKey stri
 }
 
 func (s *UserService) reapUserID(ctx context.Context, publicKey string) (string, error) {
-	return resolveReapUserID(ctx, s.pool, publicKey)
+	return resolveReapUserID(ctx, s.db, publicKey)
 }
 
 // resolveReapUserID looks up publicKey's REAP user ID, returning
 // ErrNoReapUser if it has none recorded yet. Shared by UserService and
 // AccountService.
-func resolveReapUserID(ctx context.Context, pool *pgxpool.Pool, publicKey string) (string, error) {
-	reapUserID, err := reapmapping.GetReapUserID(ctx, pool, publicKey)
+func resolveReapUserID(ctx context.Context, db reapmapping.Querier, publicKey string) (string, error) {
+	reapUserID, err := reapmapping.GetReapUserID(ctx, db, publicKey)
 	if err != nil {
 		return "", err
 	}

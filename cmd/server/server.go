@@ -291,6 +291,8 @@ func (s *Server) createUser(c echo.Context) error {
 	switch {
 	case errors.Is(err, service.ErrReapUserExists):
 		return c.JSON(http.StatusConflict, echo.Map{"error": "reap user already exists"})
+	case errors.Is(err, service.ErrReapUserCreateInFlight):
+		return c.JSON(http.StatusConflict, echo.Map{"error": "reap user creation already in progress"})
 	case err != nil:
 		log.Printf("createUser: %v", err)
 		return c.JSON(http.StatusInternalServerError, echo.Map{"error": "internal error"})

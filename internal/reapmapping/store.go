@@ -3,14 +3,14 @@ package reapmapping
 import (
 	"context"
 	"errors"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 )
 
 // Querier is satisfied by both *pgxpool.Pool and pgx.Tx, so callers can run
-// these queries either directly against the pool or inside a transaction
-// (e.g. to hold an advisory lock across them).
+// these queries either directly against the pool or inside a transaction.
 type Querier interface {
 	Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error)
 	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
@@ -49,14 +49,15 @@ func GetReapUserID(ctx context.Context, db Querier, publicKey string) (string, e
 }
 
 // SetReapUserID sets publicKey's REAP user ID, creating the mapping row on
-// first use. It only sets the value if one isn't already set, returning
-// false if publicKey already had a REAP user ID.
+// first use, and clears any in-flight create claim (see
+// ClaimReapUserCreate). It only sets the value if one isn't already set,
+// returning false if publicKey already had a REAP user ID.
 func SetReapUserID(ctx context.Context, db Querier, publicKey, reapUserID string) (bool, error) {
 	tag, err := db.Exec(ctx, `
 		INSERT INTO vultisig_reap_mappings (public_key_ecdsa, reap_user_id, updated_at, last_used_at)
 		VALUES ($1, $2, now(), now())
 		ON CONFLICT (public_key_ecdsa) DO UPDATE
-			SET reap_user_id = $2, updated_at = now(), last_used_at = now()
+			SET reap_user_id = $2, reap_user_create_started_at = NULL, updated_at = now(), last_used_at = now()
 			WHERE vultisig_reap_mappings.reap_user_id IS NULL
 	`, publicKey, reapUserID)
 	if err != nil {
@@ -81,4 +82,33 @@ func ClaimNonce(ctx context.Context, db Querier, publicKey string, expected int6
 		return false, err
 	}
 	return tag.RowsAffected() == 1, nil
+}
+
+// ClaimReapUserCreate marks publicKey as having a REAP user creation in flight, creating the row
+// on first use. False if it already has a user ID or a claim under staleAfter old; older ones are
+// treated as abandoned and taken over.
+func ClaimReapUserCreate(ctx context.Context, db Querier, publicKey string, staleAfter time.Duration) (bool, error) {
+	tag, err := db.Exec(ctx, `
+		INSERT INTO vultisig_reap_mappings (public_key_ecdsa, reap_user_create_started_at, updated_at, last_used_at)
+		VALUES ($1, now(), now(), now())
+		ON CONFLICT (public_key_ecdsa) DO UPDATE
+			SET reap_user_create_started_at = now(), updated_at = now(), last_used_at = now()
+			WHERE vultisig_reap_mappings.reap_user_id IS NULL
+				AND (vultisig_reap_mappings.reap_user_create_started_at IS NULL
+					OR vultisig_reap_mappings.reap_user_create_started_at < now() - make_interval(secs => $2))
+	`, publicKey, staleAfter.Seconds())
+	if err != nil {
+		return false, err
+	}
+	return tag.RowsAffected() == 1, nil
+}
+
+// ReleaseReapUserCreate hands the claim back so a failed attempt can retry without waiting it out.
+func ReleaseReapUserCreate(ctx context.Context, db Querier, publicKey string) error {
+	_, err := db.Exec(ctx, `
+		UPDATE vultisig_reap_mappings
+		SET reap_user_create_started_at = NULL, updated_at = now()
+		WHERE public_key_ecdsa = $1 AND reap_user_id IS NULL
+	`, publicKey)
+	return err
 }

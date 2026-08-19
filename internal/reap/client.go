@@ -45,6 +45,11 @@ func NewClient(env, apiKey string, stats *statsd.Client) *Client {
 	if env == EnvProd {
 		baseURL = prodBaseURL
 	}
+	return NewClientWithBaseURL(baseURL, apiKey, stats)
+}
+
+// NewClientWithBaseURL lets tests outside this package stand an httptest server in for REAP.
+func NewClientWithBaseURL(baseURL, apiKey string, stats *statsd.Client) *Client {
 	return &Client{baseURL: baseURL, apiKey: apiKey, http: &http.Client{Timeout: requestTimeout}, stats: stats}
 }
 
