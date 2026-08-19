@@ -762,3 +762,60 @@ func TestMetricPath(t *testing.T) {
 		}
 	}
 }
+
+func TestClientEscapesPathIDs(t *testing.T) {
+	var gotPath, gotQuery string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath, gotQuery = r.URL.EscapedPath(), r.URL.RawQuery
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	c := &Client{baseURL: srv.URL, apiKey: "test-key", http: srv.Client()}
+	ctx := context.Background()
+
+	tests := []struct {
+		name string
+		call func()
+		want string
+	}{
+		{
+			name: "query injection",
+			call: func() { _, _, _ = c.GetCardTransaction(ctx, "txn-1?limit=9999") },
+			want: "/card-transactions/txn-1%3Flimit=9999",
+		},
+		{
+			name: "path traversal",
+			call: func() { _, _, _ = c.GetCardDesign(ctx, "../../users/victim") },
+			want: "/card-designs/..%2F..%2Fusers%2Fvictim",
+		},
+		{
+			name: "already-encoded traversal",
+			call: func() { _, _, _ = c.GetCard(ctx, "..%2f..%2fusers%2fvictim") },
+			want: "/cards/..%252f..%252fusers%252fvictim",
+		},
+		{
+			name: "every segment escaped",
+			call: func() { _, _, _ = c.RemoveCardFromShipment(ctx, "shp-1/x", "mem-1?y") },
+			want: "/card-shipments/shp-1%2Fx/cards/mem-1%3Fy",
+		},
+		{
+			name: "ordinary id is untouched",
+			call: func() { _, _, _ = c.GetAccount(ctx, "acc-1") },
+			want: "/accounts/acc-1",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gotPath, gotQuery = "", ""
+			tt.call()
+			if gotPath != tt.want {
+				t.Errorf("path = %q, want %q", gotPath, tt.want)
+			}
+			if gotQuery != "" {
+				t.Errorf("query = %q, want empty", gotQuery)
+			}
+		})
+	}
+}
