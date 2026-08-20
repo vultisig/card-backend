@@ -103,6 +103,7 @@ func (s *WebhookService) notifyVault(ctx context.Context, eventType string, data
 		return
 	}
 	if publicKey == "" {
+		log.Printf("webhook: resolve vault for %s event: no ownership record", eventType)
 		return
 	}
 
