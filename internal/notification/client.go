@@ -74,6 +74,9 @@ type Request struct {
 // asynq options its own POST /notify handler uses so a stuck task is
 // retried/expired the same way.
 func (c *Client) Notify(ctx context.Context, req Request) error {
+	if req.Type == "" {
+		return errors.New("notification: type is required")
+	}
 	payload, err := json.Marshal(req)
 	if err != nil {
 		return err

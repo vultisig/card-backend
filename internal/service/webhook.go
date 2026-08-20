@@ -87,6 +87,9 @@ func (s *WebhookService) HandleEvent(ctx context.Context, rawBody []byte, signat
 // are logged, not returned: the event is already durably recorded by the
 // time this runs, so a downstream notification hiccup must not fail
 // HandleEvent and trigger a REAP retry of an event we've already stored.
+// notification.Client.Notify enqueues onto Redis rather than making an HTTP
+// call, so this stays synchronous — no goroutine/worker pool needed to keep
+// it off the webhook response path.
 // No-ops if s.notification is nil (NOTIFICATION_REDIS_URL unset/invalid at
 // startup — webhook notifications are optional).
 func (s *WebhookService) notifyVault(ctx context.Context, eventType string, data json.RawMessage) {
