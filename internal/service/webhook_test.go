@@ -61,6 +61,24 @@ func TestEventSubjectIDs(t *testing.T) {
 			wantCardID: "card_1",
 		},
 		{
+			name:       "card transaction updated carries cardId",
+			eventType:  "CARD_TRANSACTION_UPDATED",
+			data:       `{"id":"txn_1","cardId":"card_1"}`,
+			wantCardID: "card_1",
+		},
+		{
+			name:       "fraud alert status updated carries cardId",
+			eventType:  "CARD_FRAUD_ALERT_STATUS_UPDATED",
+			data:       `{"id":"alert_1","cardId":"card_1"}`,
+			wantCardID: "card_1",
+		},
+		{
+			name:       "card dispute carries cardId",
+			eventType:  "CARD_DISPUTE_STATUS_UPDATED",
+			data:       `{"id":"dispute_1","cardId":"card_1","transactionId":"txn_1"}`,
+			wantCardID: "card_1",
+		},
+		{
 			name:       "card shipment carries cards[].cardId",
 			eventType:  "CARD_SHIPMENT_STATUS_UPDATED",
 			data:       `{"id":"ship_1","cards":[{"cardId":"card_1"},{"cardId":"card_2"}]}`,
@@ -73,10 +91,32 @@ func TestEventSubjectIDs(t *testing.T) {
 			wantCardID: "card_1",
 		},
 		{
+			name:          "crypto deposit created carries accountId",
+			eventType:     "CRYPTO_DEPOSIT_CREATED",
+			data:          `{"id":"deposit_1","accountId":"account_1","chainId":"BASE","status":"PENDING","amount":"100.00"}`,
+			wantAccountID: "account_1",
+		},
+		{
+			name:          "crypto deposit status updated carries accountId",
+			eventType:     "CRYPTO_DEPOSIT_STATUS_UPDATED",
+			data:          `{"id":"deposit_1","accountId":"account_1","status":"CONFIRMED"}`,
+			wantAccountID: "account_1",
+		},
+		{
 			name:          "account status updated is keyed by its own id",
 			eventType:     "ACCOUNT_STATUS_UPDATED",
 			data:          `{"id":"account_1","status":"ACTIVE"}`,
 			wantAccountID: "account_1",
+		},
+		{
+			// REAP publishes no payload schema for this event, and its most
+			// plausible source resource (the push-provisioning response) has
+			// no cardId field at all — see the ponytail comment on
+			// eventSubjectIDs. This documents the current (unresolved)
+			// behavior rather than asserting a guessed shape.
+			name:      "card tokenization requested is not resolved",
+			eventType: "CARD_TOKENIZATION_REQUESTED",
+			data:      `{"provider":"GOOGLE_PAY","opc":"...","last4":"1234"}`,
 		},
 		{
 			name:       "user application status updated is keyed by its own id",

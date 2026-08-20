@@ -136,12 +136,20 @@ func (s *WebhookService) resolveVault(ctx context.Context, eventType string, dat
 
 // eventSubjectIDs extracts the id REAP's webhook data identifies its
 // subject by. Per REAP's docs, a webhook's data "match[es] the shape of the
-// corresponding API resource", so the field to key off of depends on the
-// event type:
-//   - card-scoped resources (transactions, fraud alerts, 3DS challenges)
-//     carry a cardId; shipments carry cards[].cardId; CARD_STATUS_UPDATED's
-//     data IS the card resource, keyed by its own id (same shape CardService
-//     reads — see internal/service/card.go)
+// corresponding API resource" (GET /resource/:id), so the field to key off
+// of depends on the event type:
+//   - card-scoped resources carry a cardId: CARD_TRANSACTION_CREATED/
+//     UPDATED (transaction), CARD_FRAUD_ALERT_CREATED/STATUS_UPDATED (fraud
+//     alert), CARD_3DS_CHALLENGE_CREATED (3DS challenge), and
+//     CARD_DISPUTE_STATUS_UPDATED (dispute) — same shape CardTransaction/
+//     FraudAlert/CardService already read (internal/service/cardtransaction.go,
+//     fraudalert.go, card.go)
+//   - CARD_SHIPMENT_STATUS_UPDATED's data is the shipment resource, carrying
+//     cards[].cardId (a shipment can hold more than one card; the first is
+//     used — see internal/service/cardshipment.go)
+//   - CARD_STATUS_UPDATED's data IS the card resource, keyed by its own id
+//   - account-scoped resources carry an accountId: CRYPTO_DEPOSIT_CREATED/
+//     STATUS_UPDATED (deposit)
 //   - ACCOUNT_STATUS_UPDATED's data is the account resource, keyed by id
 //   - USER_APPLICATION_STATUS_UPDATED's data is the user resource, keyed by
 //     id (REAP's user id, reverse-mapped to a vault via reapmapping)
@@ -149,10 +157,12 @@ func (s *WebhookService) resolveVault(ctx context.Context, eventType string, dat
 // Returns exactly one of cardID/accountID/userID set, or all empty if
 // eventType/data don't resolve to any of the above.
 //
-// ponytail: COMPANY_STATUS_UPDATED, CARD_DISPUTE_STATUS_UPDATED, and the
-// CRYPTO_DEPOSIT_* events aren't resolved (no local ownership table for
-// company or dispute; deposits' accountId is only a guess and unverified
-// against a real payload) — add a case here once one exists.
+// ponytail: COMPANY_STATUS_UPDATED isn't resolved — no local ownership
+// table for a company. CARD_TOKENIZATION_REQUESTED isn't resolved either:
+// REAP's docs don't publish a payload schema for it, and the resource it
+// most plausibly corresponds to (the push-provisioning response) has no
+// cardId field at all (the card is identified by the request path, not the
+// response body) — add a case for it once a real delivered payload is seen.
 func eventSubjectIDs(eventType string, data json.RawMessage) (cardID, accountID, userID string) {
 	var payload struct {
 		ID        string `json:"id"`
