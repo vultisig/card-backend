@@ -2,8 +2,8 @@ package db
 
 import (
 	"context"
-	"strings"
 
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -32,8 +32,15 @@ func poolConfig(url string) (*pgxpool.Config, error) {
 	if err != nil {
 		return nil, err
 	}
-	// ParseConfig reports the resulting MaxConns but not whether it came from url, so check the string.
-	if !strings.Contains(url, "pool_max_conns") {
+	// ParseConfig reports the resulting MaxConns but not whether it came from url,
+	// so ask pgconn — it is the parser pgxpool itself uses, so it reads the setting
+	// the same way: both URL and keyword/value forms, percent-encoded keys included.
+	// A substring search would miss those and match the value of an unrelated setting.
+	conn, err := pgconn.ParseConfig(url)
+	if err != nil {
+		return nil, err
+	}
+	if _, ok := conn.RuntimeParams["pool_max_conns"]; !ok {
 		cfg.MaxConns = defaultMaxConns
 	}
 	return cfg, nil
