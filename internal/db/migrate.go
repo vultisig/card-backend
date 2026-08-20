@@ -35,6 +35,7 @@ CREATE TABLE IF NOT EXISTS vultisig_reap_mappings (
 -- Added after the table shipped: CREATE TABLE IF NOT EXISTS above is a no-op on existing databases.
 ALTER TABLE vultisig_reap_mappings
 	ADD COLUMN IF NOT EXISTS reap_user_create_started_at TIMESTAMPTZ;
+ALTER TABLE vultisig_reap_mappings ADD COLUMN IF NOT EXISTS hex_chain_code TEXT;
 
 CREATE TABLE IF NOT EXISTS vultisig_card_ownership (
 	card_id TEXT PRIMARY KEY,

@@ -22,6 +22,13 @@ type Config struct {
 	// the standard local Datadog agent address; metrics are silently
 	// dropped if nothing is listening there.
 	StatsDAddr string
+	// NotificationRedisURL is the redis://.../rediss://... URI of the Redis
+	// instance backing the Vultisig notification service's asynq queue.
+	// Webhook notifications are pushed by enqueueing directly onto it
+	// (bypassing the notification service's HTTP API) — see
+	// internal/notification. Optional: if unset, webhook notifications are
+	// disabled but the rest of the server runs as normal.
+	NotificationRedisURL string
 }
 
 func Load() Config {
@@ -41,12 +48,13 @@ func Load() Config {
 	}
 
 	return Config{
-		Port:              viper.GetString("port"),
-		DatabaseURL:       viper.GetString("database_url"),
-		JWTSecret:         viper.GetString("jwt_secret"),
-		ReapAPIKey:        viper.GetString("reap_api_key"),
-		ReapEnv:           viper.GetString("reap_env"),
-		ReapWebhookSecret: viper.GetString("reap_webhook_secret"),
-		StatsDAddr:        viper.GetString("statsd_addr"),
+		Port:                 viper.GetString("port"),
+		DatabaseURL:          viper.GetString("database_url"),
+		JWTSecret:            viper.GetString("jwt_secret"),
+		ReapAPIKey:           viper.GetString("reap_api_key"),
+		ReapEnv:              viper.GetString("reap_env"),
+		ReapWebhookSecret:    viper.GetString("reap_webhook_secret"),
+		StatsDAddr:           viper.GetString("statsd_addr"),
+		NotificationRedisURL: viper.GetString("notification_redis_url"),
 	}
 }

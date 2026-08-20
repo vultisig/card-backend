@@ -3,6 +3,7 @@ package reapmapping
 import (
 	"context"
 	"errors"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -48,6 +49,39 @@ func GetReapUserID(ctx context.Context, db Querier, publicKey string) (string, e
 	return *reapUserID, nil
 }
 
+// GetHexChainCode returns publicKey's recorded hex chain code (normalized:
+// lowercased, "0x"-stripped — see ClaimNonce), or "" if no mapping row
+// exists yet or none has been recorded.
+func GetHexChainCode(ctx context.Context, db Querier, publicKey string) (string, error) {
+	var hexChainCode *string
+	err := db.QueryRow(ctx, `
+		SELECT hex_chain_code FROM vultisig_reap_mappings WHERE public_key_ecdsa = $1
+	`, publicKey).Scan(&hexChainCode)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", nil
+	}
+	if err != nil {
+		return "", err
+	}
+	if hexChainCode == nil {
+		return "", nil
+	}
+	return *hexChainCode, nil
+}
+
+// GetPublicKeyByReapUserID returns the vault public key mapped to
+// reapUserID, or "" if none is recorded (reap_user_id is unique per vault).
+func GetPublicKeyByReapUserID(ctx context.Context, db Querier, reapUserID string) (string, error) {
+	var publicKey string
+	err := db.QueryRow(ctx, `
+		SELECT public_key_ecdsa FROM vultisig_reap_mappings WHERE reap_user_id = $1
+	`, reapUserID).Scan(&publicKey)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", nil
+	}
+	return publicKey, err
+}
+
 // SetReapUserID sets publicKey's REAP user ID, creating the mapping row on
 // first use, and clears any in-flight create claim (see
 // ClaimReapUserCreate). It only sets the value if one isn't already set,
@@ -68,16 +102,23 @@ func SetReapUserID(ctx context.Context, db Querier, publicKey, reapUserID string
 
 // ClaimNonce atomically advances publicKey's nonce from expected to
 // expected+1, creating the mapping row on first use, so the same signed
-// nonce can never be replayed. Returns false if the nonce didn't match
-// (already used, or wrong value).
-func ClaimNonce(ctx context.Context, db Querier, publicKey string, expected int64) (bool, error) {
+// nonce can never be replayed. It also records hexChainCode, the chain code
+// the client authenticated with, on first use; since it's constant per
+// vault, a claim whose hexChainCode doesn't match an already-recorded value
+// fails (like a nonce mismatch) instead of silently overwriting it. Returns
+// false if the nonce or chain code didn't match.
+func ClaimNonce(ctx context.Context, db Querier, publicKey string, expected int64, hexChainCode string) (bool, error) {
+	hexChainCode = strings.ToLower(strings.TrimPrefix(hexChainCode, "0x"))
 	tag, err := db.Exec(ctx, `
-		INSERT INTO vultisig_reap_mappings (public_key_ecdsa, nonce, updated_at, last_used_at)
-		VALUES ($1, $2 + 1, now(), now())
+		INSERT INTO vultisig_reap_mappings (public_key_ecdsa, nonce, hex_chain_code, updated_at, last_used_at)
+		VALUES ($1, $2 + 1, $3, now(), now())
 		ON CONFLICT (public_key_ecdsa) DO UPDATE
-			SET nonce = vultisig_reap_mappings.nonce + 1, updated_at = now(), last_used_at = now()
+			SET nonce = vultisig_reap_mappings.nonce + 1,
+			    hex_chain_code = COALESCE(vultisig_reap_mappings.hex_chain_code, $3),
+			    updated_at = now(), last_used_at = now()
 			WHERE vultisig_reap_mappings.nonce = $2
-	`, publicKey, expected)
+			  AND (vultisig_reap_mappings.hex_chain_code IS NULL OR vultisig_reap_mappings.hex_chain_code = $3)
+	`, publicKey, expected, hexChainCode)
 	if err != nil {
 		return false, err
 	}

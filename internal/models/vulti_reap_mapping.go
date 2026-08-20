@@ -6,6 +6,7 @@ type VultisigReapMapping struct {
 	ID             int64     `json:"id"`
 	PublicKeyECDSA string    `json:"public_key_ecdsa"`
 	ReapUserID     string    `json:"reap_user_id"`
+	HexChainCode   string    `json:"hex_chain_code"`
 	Nonce          int64     `json:"nonce"`
 	CreatedAt      time.Time `json:"created_at"`
 	UpdatedAt      time.Time `json:"updated_at"`
