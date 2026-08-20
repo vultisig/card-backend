@@ -1,65 +1,90 @@
-// Package notification is a thin client for the Vultisig notification
-// service (POST /notify), used to push a client notification when a REAP
-// webhook event affects a known vault.
+// Package notification enqueues push-notification requests directly onto
+// the Vultisig notification service's Redis-backed asynq queue — the same
+// queue its own POST /notify handler enqueues onto (see the notification
+// repo's api/server.go and models/tasks.go) — instead of making an HTTP
+// round trip for every REAP webhook event. The notification service's
+// worker (cmd/worker/main.go) consumes the queue exactly as it would a
+// request that came in over HTTP.
 package notification
 
 import (
-	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
-	"fmt"
-	"io"
-	"net/http"
+	"errors"
 	"time"
+
+	"github.com/hibiken/asynq"
+	"github.com/redis/go-redis/v9"
 )
 
-const requestTimeout = 10 * time.Second
+// queueName and taskType mirror models.QUEUE_NAME/TypeNotification in the
+// notification service (models/tasks.go) — the queue/task type its worker
+// is registered to consume (cmd/worker/main.go).
+const (
+	queueName = "notification"
+	taskType  = "key:notification"
+)
 
 type Client struct {
-	baseURL string
-	http    *http.Client
+	asynq *asynq.Client
 }
 
-func NewClient(baseURL string) *Client {
-	return &Client{baseURL: baseURL, http: &http.Client{Timeout: requestTimeout}}
+// NewClient builds a Client that enqueues onto the Redis instance at
+// redisURL (a redis:// or rediss:// URI, as accepted by redis.ParseURL).
+// Returns an error if redisURL is empty or doesn't parse — the caller
+// decides whether that's fatal.
+func NewClient(redisURL string) (*Client, error) {
+	if redisURL == "" {
+		return nil, errors.New("notification: redis url not configured")
+	}
+	opt, err := redis.ParseURL(redisURL)
+	if err != nil {
+		return nil, err
+	}
+	return &Client{asynq: asynq.NewClient(asynq.RedisClientOpt{
+		Addr:      opt.Addr,
+		Username:  opt.Username,
+		Password:  opt.Password,
+		DB:        opt.DB,
+		TLSConfig: opt.TLSConfig,
+	})}, nil
 }
 
-// Request is the body of POST /notify. Type must be set to something other
-// than "" (which the notification service defaults to "keysign" and then
-// requires vault_name/qr_code_data/local_party_id for) — "generic" only
-// requires VaultID.
+// Close releases the underlying Redis connection pool.
+func (c *Client) Close() error {
+	return c.asynq.Close()
+}
+
+// Request mirrors models.NotificationRequest's JSON shape in the
+// notification service (models/notification.go) — its worker unmarshals
+// the task payload directly into that struct.
 type Request struct {
 	VaultID string `json:"vault_id"`
-	Type    string `json:"type"`
-	Title   string `json:"title,omitempty"`
-	Body    string `json:"body,omitempty"`
+	// Type must be set to something other than "" (which the notification
+	// service defaults to "keysign" and then requires vault_name/
+	// qr_code_data/local_party_id for) — "generic" only requires VaultID.
+	Type  string `json:"type"`
+	Title string `json:"title,omitempty"`
+	Body  string `json:"body,omitempty"`
 }
 
-// Notify calls POST /notify. A non-2xx response is returned as an error.
+// Notify enqueues req onto the notification service's queue, matching the
+// asynq options its own POST /notify handler uses so a stuck task is
+// retried/expired the same way.
 func (c *Client) Notify(ctx context.Context, req Request) error {
-	b, err := json.Marshal(req)
+	payload, err := json.Marshal(req)
 	if err != nil {
 		return err
 	}
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/notify", bytes.NewReader(b))
-	if err != nil {
-		return err
-	}
-	httpReq.Header.Set("Content-Type", "application/json")
-
-	resp, err := c.http.Do(httpReq)
-	if err != nil {
-		return err
-	}
-	defer func() { _ = resp.Body.Close() }()
-
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		respBody, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("notification: notify returned %d: %s", resp.StatusCode, respBody)
-	}
-	return nil
+	_, err = c.asynq.EnqueueContext(ctx, asynq.NewTask(taskType, payload),
+		asynq.Queue(queueName),
+		asynq.MaxRetry(-1),
+		asynq.Timeout(time.Minute),
+		asynq.Retention(time.Minute),
+	)
+	return err
 }
 
 // VaultID computes the notification service's vault_id for a card-backend

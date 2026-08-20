@@ -64,7 +64,14 @@ func main() {
 	activityService := service.NewActivityService(pool, reapClient)
 	fraudAlertService := service.NewFraudAlertService(pool, reapClient)
 	simulationService := service.NewSimulationService(pool, reapClient)
-	notificationClient := notification.NewClient(cfg.NotificationBaseURL)
+	notificationClient, err := notification.NewClient(cfg.NotificationRedisURL)
+	if err != nil {
+		// Webhook notifications are best-effort: a missing/invalid queue
+		// shouldn't stop the server from serving its other routes.
+		log.Printf("notification: %v (webhook notifications disabled)", err)
+	} else {
+		defer func() { _ = notificationClient.Close() }()
+	}
 	webhookService := service.NewWebhookService(pool, cfg.ReapWebhookSecret, notificationClient)
 	srv := NewServer(pool, stats, authService, userService, accountService, cardService, cardShipmentService, cardDesignService, cardTransactionService, activityService, fraudAlertService, simulationService, webhookService, cfg.ReapEnv)
 

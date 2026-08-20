@@ -87,7 +87,13 @@ func (s *WebhookService) HandleEvent(ctx context.Context, rawBody []byte, signat
 // are logged, not returned: the event is already durably recorded by the
 // time this runs, so a downstream notification hiccup must not fail
 // HandleEvent and trigger a REAP retry of an event we've already stored.
+// No-ops if s.notification is nil (NOTIFICATION_REDIS_URL unset/invalid at
+// startup — webhook notifications are optional).
 func (s *WebhookService) notifyVault(ctx context.Context, eventType string, data json.RawMessage) {
+	if s.notification == nil {
+		return
+	}
+
 	publicKey, err := s.resolveVault(ctx, eventType, data)
 	if err != nil {
 		log.Printf("webhook: resolve vault for %s event: %v", eventType, err)
