@@ -74,15 +74,16 @@ func (s *UserService) CreateUser(ctx context.Context, publicKey string, req reap
 		return status, body, nil
 	}
 
+	// No release past this point: a 2xx means REAP has created the user, so a
+	// retry would make a second one -- including when we can't read the id back
+	// out of the response and have nothing to record.
 	var created struct {
 		ID string `json:"id"`
 	}
 	if err := json.Unmarshal(body, &created); err != nil || created.ID == "" {
-		s.releaseCreateClaim(ctx, publicKey)
 		return 0, nil, errors.New("reap: create user response missing id")
 	}
 
-	// No release past this point: REAP has created the user, so a retry would make a second one.
 	ok, err := reapmapping.SetReapUserID(ctx, s.db, publicKey, created.ID)
 	if err != nil {
 		return 0, nil, err

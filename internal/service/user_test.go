@@ -122,8 +122,9 @@ func TestCreateUserReleasesClaimOnReapError(t *testing.T) {
 	}
 }
 
-// A 2xx with no id is the same situation: nothing to record, so the claim goes back.
-func TestCreateUserReleasesClaimOnUnusableResponse(t *testing.T) {
+// A 2xx with no id is not the same situation: REAP said it created the user, so
+// there is nothing to record but also nothing safe to retry.
+func TestCreateUserKeepsClaimOnUnusableResponse(t *testing.T) {
 	db := &fakeQuerier{claimGranted: true}
 	client, _ := fakeReap(t, db, http.StatusCreated, `{"no-id-here":true}`)
 	svc := NewUserService(db, client)
@@ -131,8 +132,11 @@ func TestCreateUserReleasesClaimOnUnusableResponse(t *testing.T) {
 	if _, _, err := svc.CreateUser(context.Background(), "pubkey", reap.CreateUserRequest{}); err == nil {
 		t.Fatal("expected an error for a response with no id")
 	}
-	if !db.ran(sqlRelease) {
-		t.Error("the claim was not released after an unusable REAP response")
+	if db.ran(sqlRelease) {
+		t.Error("the claim was released after a 2xx, letting a retry create a second REAP user")
+	}
+	if db.ran(sqlRecord) {
+		t.Error("recorded a REAP user ID from a response that had none")
 	}
 }
 
