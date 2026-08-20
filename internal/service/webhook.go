@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log"
 	"strings"
 	"time"
@@ -109,7 +110,7 @@ func (s *WebhookService) notifyVault(ctx context.Context, eventType string, data
 		VaultID: notification.VaultID(publicKey, hexChainCode),
 		Type:    "generic",
 		Title:   "Vultisig Card",
-		Body:    describeEvent(eventType),
+		Body:    notificationBody(eventType, data),
 	})
 	if err != nil {
 		log.Printf("webhook: notify: %v", err)
@@ -201,8 +202,218 @@ func eventSubjectIDs(eventType string, data json.RawMessage) (cardID, accountID,
 	return "", "", ""
 }
 
-// describeEvent turns a REAP event type constant (e.g. "CARD_STATUS_UPDATED")
-// into a human-readable notification body ("card status updated").
-func describeEvent(eventType string) string {
-	return strings.ToLower(strings.ReplaceAll(eventType, "_", " "))
+// notificationBody builds a human-readable notification body for a REAP
+// event, pulling the relevant fields out of data (the resource shape noted
+// on eventSubjectIDs). Falls back to a humanized event type for any event
+// not covered below (currently unreachable in practice — resolveVault only
+// resolves a vault, and so only calls this, for the event types handled
+// here — but kept so a future case added to eventSubjectIDs without a
+// matching one here still produces a readable body instead of an empty one).
+func notificationBody(eventType string, data json.RawMessage) string {
+	switch eventType {
+	case "USER_APPLICATION_STATUS_UPDATED":
+		return userApplicationBody(data)
+	case "CRYPTO_DEPOSIT_CREATED":
+		return depositBody(data, "detected")
+	case "CRYPTO_DEPOSIT_STATUS_UPDATED":
+		return depositBody(data, "updated")
+	case "CARD_TRANSACTION_CREATED":
+		return transactionBody(data, "New")
+	case "CARD_TRANSACTION_UPDATED":
+		return transactionBody(data, "Updated")
+	case "CARD_FRAUD_ALERT_CREATED", "CARD_FRAUD_ALERT_STATUS_UPDATED":
+		return fraudAlertBody(data)
+	case "CARD_SHIPMENT_STATUS_UPDATED":
+		return shipmentBody(data)
+	case "CARD_DISPUTE_STATUS_UPDATED":
+		return disputeBody(data)
+	case "CARD_3DS_CHALLENGE_CREATED":
+		return challengeBody(data)
+	case "CARD_STATUS_UPDATED":
+		return cardStatusBody(data)
+	case "ACCOUNT_STATUS_UPDATED":
+		return accountStatusBody(data)
+	default:
+		return humanize(eventType)
+	}
+}
+
+// userApplicationBody covers USER_APPLICATION_STATUS_UPDATED (user
+// resource, application.status — see https://docs.reap.global/api-reference
+// GET /users/:id).
+func userApplicationBody(data json.RawMessage) string {
+	var payload struct {
+		Application struct {
+			Status string `json:"status"`
+		} `json:"application"`
+	}
+	if err := json.Unmarshal(data, &payload); err != nil || payload.Application.Status == "" {
+		return "Your KYC application has been updated"
+	}
+	return fmt.Sprintf("Your KYC application has been %s", humanize(payload.Application.Status))
+}
+
+// depositBody covers CRYPTO_DEPOSIT_CREATED/STATUS_UPDATED (crypto deposit
+// resource: transactionId, status, amount, asset.symbol, occurredAt).
+func depositBody(data json.RawMessage, verb string) string {
+	var payload struct {
+		TransactionID string `json:"transactionId"`
+		Status        string `json:"status"`
+		Amount        string `json:"amount"`
+		OccurredAt    string `json:"occurredAt"`
+		Asset         struct {
+			Symbol string `json:"symbol"`
+		} `json:"asset"`
+	}
+	if err := json.Unmarshal(data, &payload); err != nil {
+		return "Your deposit has been " + verb
+	}
+	return fmt.Sprintf("Your deposit has been %s: %s (%s). Tx %s at %s",
+		verb, formatAmount(payload.Amount, payload.Asset.Symbol), humanize(payload.Status),
+		payload.TransactionID, formatTimestamp(payload.OccurredAt))
+}
+
+// transactionBody covers CARD_TRANSACTION_CREATED/UPDATED (card transaction
+// resource: status, amount, currency, merchant.name).
+func transactionBody(data json.RawMessage, verb string) string {
+	var payload struct {
+		Status   string `json:"status"`
+		Amount   string `json:"amount"`
+		Currency string `json:"currency"`
+		Merchant struct {
+			Name string `json:"name"`
+		} `json:"merchant"`
+	}
+	if err := json.Unmarshal(data, &payload); err != nil {
+		return verb + " card transaction"
+	}
+	merchant := payload.Merchant.Name
+	if merchant == "" {
+		merchant = "a merchant"
+	}
+	return fmt.Sprintf("%s card transaction: %s at %s (%s)",
+		verb, formatAmount(payload.Amount, payload.Currency), merchant, humanize(payload.Status))
+}
+
+// fraudAlertBody covers CARD_FRAUD_ALERT_CREATED/STATUS_UPDATED (fraud
+// alert resource: status, type — e.g. CARD_LOST, CARD_STOLEN).
+func fraudAlertBody(data json.RawMessage) string {
+	var payload struct {
+		Status string `json:"status"`
+		Type   string `json:"type"`
+	}
+	if err := json.Unmarshal(data, &payload); err != nil || payload.Status == "" {
+		return "Fraud alert on your card"
+	}
+	if payload.Type == "" {
+		return fmt.Sprintf("Fraud alert: %s", humanize(payload.Status))
+	}
+	return fmt.Sprintf("Fraud alert: %s (%s)", humanize(payload.Type), humanize(payload.Status))
+}
+
+// shipmentBody covers CARD_SHIPMENT_STATUS_UPDATED (shipment resource:
+// status, trackingNumber).
+func shipmentBody(data json.RawMessage) string {
+	var payload struct {
+		Status         string `json:"status"`
+		TrackingNumber string `json:"trackingNumber"`
+	}
+	if err := json.Unmarshal(data, &payload); err != nil || payload.Status == "" {
+		return "Your card shipment has been updated"
+	}
+	body := fmt.Sprintf("Your card shipment is now %s", humanize(payload.Status))
+	if payload.TrackingNumber != "" {
+		body += fmt.Sprintf(" (tracking %s)", payload.TrackingNumber)
+	}
+	return body
+}
+
+// disputeBody covers CARD_DISPUTE_STATUS_UPDATED (dispute resource: status).
+func disputeBody(data json.RawMessage) string {
+	var payload struct {
+		Status string `json:"status"`
+	}
+	if err := json.Unmarshal(data, &payload); err != nil || payload.Status == "" {
+		return "Your card dispute has been updated"
+	}
+	return fmt.Sprintf("Your card dispute is now %s", humanize(payload.Status))
+}
+
+// challengeBody covers CARD_3DS_CHALLENGE_CREATED (3DS challenge resource:
+// merchant.name, transaction.amount, transaction.currency).
+func challengeBody(data json.RawMessage) string {
+	var payload struct {
+		Merchant struct {
+			Name string `json:"name"`
+		} `json:"merchant"`
+		Transaction struct {
+			Amount   string `json:"amount"`
+			Currency string `json:"currency"`
+		} `json:"transaction"`
+	}
+	if err := json.Unmarshal(data, &payload); err != nil {
+		return "Approve a card purchase"
+	}
+	merchant := payload.Merchant.Name
+	if merchant == "" {
+		merchant = "a merchant"
+	}
+	return fmt.Sprintf("Approve your %s purchase at %s?",
+		formatAmount(payload.Transaction.Amount, payload.Transaction.Currency), merchant)
+}
+
+// cardStatusBody covers CARD_STATUS_UPDATED (card resource: status — e.g.
+// ACTIVE, FROZEN, BLOCKED, EXPIRED).
+func cardStatusBody(data json.RawMessage) string {
+	var payload struct {
+		Status string `json:"status"`
+	}
+	if err := json.Unmarshal(data, &payload); err != nil || payload.Status == "" {
+		return "Your card status has been updated"
+	}
+	return fmt.Sprintf("Your card is now %s", humanize(payload.Status))
+}
+
+// accountStatusBody covers ACCOUNT_STATUS_UPDATED (account resource: status
+// — e.g. ACTIVE, RESTRICTED).
+func accountStatusBody(data json.RawMessage) string {
+	var payload struct {
+		Status string `json:"status"`
+	}
+	if err := json.Unmarshal(data, &payload); err != nil || payload.Status == "" {
+		return "Your account status has been updated"
+	}
+	return fmt.Sprintf("Your account is now %s", humanize(payload.Status))
+}
+
+// humanize turns a REAP enum or event-type constant (e.g.
+// "CARD_STATUS_UPDATED", "IN_TRANSIT") into lowercase, space-separated text
+// for a notification body.
+func humanize(s string) string {
+	return strings.ToLower(strings.ReplaceAll(s, "_", " "))
+}
+
+// formatAmount renders an amount with its currency/asset symbol for a
+// notification body, e.g. formatAmount("100.00", "USDC") -> "100.00 USDC".
+// REAP returns amounts as strings (arbitrary-precision decimals), so this
+// never parses them as numbers.
+func formatAmount(amount, unit string) string {
+	switch {
+	case amount == "":
+		return unit
+	case unit == "":
+		return amount
+	default:
+		return amount + " " + unit
+	}
+}
+
+// formatTimestamp renders an RFC3339 timestamp for a notification body,
+// falling back to the raw value if it doesn't parse (or is empty).
+func formatTimestamp(raw string) string {
+	t, err := time.Parse(time.RFC3339, raw)
+	if err != nil {
+		return raw
+	}
+	return t.Format("Jan 2, 2006 3:04 PM")
 }

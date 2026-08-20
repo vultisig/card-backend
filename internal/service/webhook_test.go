@@ -145,3 +145,110 @@ func TestEventSubjectIDs(t *testing.T) {
 		})
 	}
 }
+
+func TestNotificationBody(t *testing.T) {
+	tests := []struct {
+		name            string
+		eventType, data string
+		want            string
+	}{
+		{
+			name:      "user application approved",
+			eventType: "USER_APPLICATION_STATUS_UPDATED",
+			data:      `{"application":{"status":"APPROVED"}}`,
+			want:      "Your KYC application has been approved",
+		},
+		{
+			name:      "deposit created",
+			eventType: "CRYPTO_DEPOSIT_CREATED",
+			data:      `{"transactionId":"tx_1","status":"PENDING","amount":"100.00","occurredAt":"2024-01-02T15:04:05Z","asset":{"symbol":"USDC"}}`,
+			want:      "Your deposit has been detected: 100.00 USDC (pending). Tx tx_1 at Jan 2, 2024 3:04 PM",
+		},
+		{
+			name:      "deposit status updated",
+			eventType: "CRYPTO_DEPOSIT_STATUS_UPDATED",
+			data:      `{"transactionId":"tx_1","status":"CONFIRMED","amount":"100.00","occurredAt":"2024-01-02T15:04:05Z","asset":{"symbol":"USDC"}}`,
+			want:      "Your deposit has been updated: 100.00 USDC (confirmed). Tx tx_1 at Jan 2, 2024 3:04 PM",
+		},
+		{
+			name:      "card transaction created",
+			eventType: "CARD_TRANSACTION_CREATED",
+			data:      `{"status":"PENDING","amount":"170.0000","currency":"USD","merchant":{"name":"Sephora Digital"}}`,
+			want:      "New card transaction: 170.0000 USD at Sephora Digital (pending)",
+		},
+		{
+			name:      "card transaction updated",
+			eventType: "CARD_TRANSACTION_UPDATED",
+			data:      `{"status":"CLEARED","amount":"170.0000","currency":"USD","merchant":{"name":"Sephora Digital"}}`,
+			want:      "Updated card transaction: 170.0000 USD at Sephora Digital (cleared)",
+		},
+		{
+			name:      "fraud alert created",
+			eventType: "CARD_FRAUD_ALERT_CREATED",
+			data:      `{"status":"PENDING","type":"CARD_STOLEN"}`,
+			want:      "Fraud alert: card stolen (pending)",
+		},
+		{
+			name:      "fraud alert status updated",
+			eventType: "CARD_FRAUD_ALERT_STATUS_UPDATED",
+			data:      `{"status":"CONFIRMED","type":"CARD_STOLEN"}`,
+			want:      "Fraud alert: card stolen (confirmed)",
+		},
+		{
+			name:      "shipment updated with tracking",
+			eventType: "CARD_SHIPMENT_STATUS_UPDATED",
+			data:      `{"status":"IN_TRANSIT","trackingNumber":"1Z999AA1"}`,
+			want:      "Your card shipment is now in transit (tracking 1Z999AA1)",
+		},
+		{
+			name:      "shipment updated without tracking",
+			eventType: "CARD_SHIPMENT_STATUS_UPDATED",
+			data:      `{"status":"DRAFT"}`,
+			want:      "Your card shipment is now draft",
+		},
+		{
+			name:      "dispute updated",
+			eventType: "CARD_DISPUTE_STATUS_UPDATED",
+			data:      `{"status":"RESOLVED"}`,
+			want:      "Your card dispute is now resolved",
+		},
+		{
+			name:      "3ds challenge",
+			eventType: "CARD_3DS_CHALLENGE_CREATED",
+			data:      `{"merchant":{"name":"Sephora Digital"},"transaction":{"amount":"170.0000","currency":"USD"}}`,
+			want:      "Approve your 170.0000 USD purchase at Sephora Digital?",
+		},
+		{
+			name:      "card status updated",
+			eventType: "CARD_STATUS_UPDATED",
+			data:      `{"id":"card_1","status":"FROZEN"}`,
+			want:      "Your card is now frozen",
+		},
+		{
+			name:      "account status updated",
+			eventType: "ACCOUNT_STATUS_UPDATED",
+			data:      `{"id":"account_1","status":"RESTRICTED"}`,
+			want:      "Your account is now restricted",
+		},
+		{
+			name:      "unknown event type falls back to humanized type",
+			eventType: "COMPANY_STATUS_UPDATED",
+			data:      `{"id":"company_1","status":"ACTIVE"}`,
+			want:      "company status updated",
+		},
+		{
+			name:      "malformed data falls back gracefully",
+			eventType: "CARD_STATUS_UPDATED",
+			data:      `not json`,
+			want:      "Your card status has been updated",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := notificationBody(tt.eventType, []byte(tt.data))
+			if got != tt.want {
+				t.Fatalf("notificationBody() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
