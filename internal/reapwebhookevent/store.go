@@ -18,12 +18,17 @@ type Querier interface {
 }
 
 // Record stores eventID/eventType/payload. It's a no-op if eventID is
-// already recorded (a redelivery of an event already processed).
-func Record(ctx context.Context, db Querier, eventID, eventType string, payload []byte) error {
-	_, err := db.Exec(ctx, `
+// already recorded (a redelivery of an event already processed). Returns
+// whether this call actually inserted the row, so callers can tell a
+// first-time delivery from a redelivery (e.g. to avoid re-notifying on one).
+func Record(ctx context.Context, db Querier, eventID, eventType string, payload []byte) (inserted bool, err error) {
+	tag, err := db.Exec(ctx, `
 		INSERT INTO vultisig_reap_webhook_events (event_id, event_type, payload)
 		VALUES ($1, $2, $3)
 		ON CONFLICT (event_id) DO NOTHING
 	`, eventID, eventType, payload)
-	return err
+	if err != nil {
+		return false, err
+	}
+	return tag.RowsAffected() == 1, nil
 }

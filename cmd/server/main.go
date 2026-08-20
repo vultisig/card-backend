@@ -12,6 +12,7 @@ import (
 
 	"github.com/vultisig/card-backend/internal/config"
 	"github.com/vultisig/card-backend/internal/db"
+	"github.com/vultisig/card-backend/internal/notification"
 	"github.com/vultisig/card-backend/internal/reap"
 	"github.com/vultisig/card-backend/internal/service"
 	"github.com/vultisig/card-backend/internal/statsd"
@@ -63,7 +64,15 @@ func main() {
 	activityService := service.NewActivityService(pool, reapClient)
 	fraudAlertService := service.NewFraudAlertService(pool, reapClient)
 	simulationService := service.NewSimulationService(pool, reapClient)
-	webhookService := service.NewWebhookService(pool, cfg.ReapWebhookSecret)
+	notificationClient, err := notification.NewClient(cfg.NotificationRedisURL)
+	if err != nil {
+		// Webhook notifications are best-effort: a missing/invalid queue
+		// shouldn't stop the server from serving its other routes.
+		log.Printf("notification: %v (webhook notifications disabled)", err)
+	} else {
+		defer func() { _ = notificationClient.Close() }()
+	}
+	webhookService := service.NewWebhookService(pool, cfg.ReapWebhookSecret, notificationClient)
 	srv := NewServer(pool, stats, authService, userService, accountService, cardService, cardShipmentService, cardDesignService, cardTransactionService, activityService, fraudAlertService, simulationService, webhookService, cfg.ReapEnv)
 
 	log.Printf("card-backend starting on port %s", cfg.Port)
