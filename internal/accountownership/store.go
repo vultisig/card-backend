@@ -47,3 +47,16 @@ func IsOwner(ctx context.Context, db Querier, publicKey, accountID string) (bool
 	}
 	return owner == publicKey, nil
 }
+
+// OwnerOf returns the vault public key that owns accountID, or "" if
+// accountID has no ownership record at all.
+func OwnerOf(ctx context.Context, db Querier, accountID string) (string, error) {
+	var owner string
+	err := db.QueryRow(ctx, `
+		SELECT vault_public_key FROM vultisig_account_ownership WHERE account_id = $1
+	`, accountID).Scan(&owner)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", nil
+	}
+	return owner, err
+}

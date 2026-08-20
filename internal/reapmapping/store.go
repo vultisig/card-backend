@@ -49,6 +49,39 @@ func GetReapUserID(ctx context.Context, db Querier, publicKey string) (string, e
 	return *reapUserID, nil
 }
 
+// GetHexChainCode returns publicKey's recorded hex chain code (normalized:
+// lowercased, "0x"-stripped — see ClaimNonce), or "" if no mapping row
+// exists yet or none has been recorded.
+func GetHexChainCode(ctx context.Context, db Querier, publicKey string) (string, error) {
+	var hexChainCode *string
+	err := db.QueryRow(ctx, `
+		SELECT hex_chain_code FROM vultisig_reap_mappings WHERE public_key_ecdsa = $1
+	`, publicKey).Scan(&hexChainCode)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", nil
+	}
+	if err != nil {
+		return "", err
+	}
+	if hexChainCode == nil {
+		return "", nil
+	}
+	return *hexChainCode, nil
+}
+
+// GetPublicKeyByReapUserID returns the vault public key mapped to
+// reapUserID, or "" if none is recorded (reap_user_id is unique per vault).
+func GetPublicKeyByReapUserID(ctx context.Context, db Querier, reapUserID string) (string, error) {
+	var publicKey string
+	err := db.QueryRow(ctx, `
+		SELECT public_key_ecdsa FROM vultisig_reap_mappings WHERE reap_user_id = $1
+	`, reapUserID).Scan(&publicKey)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", nil
+	}
+	return publicKey, err
+}
+
 // SetReapUserID sets publicKey's REAP user ID, creating the mapping row on
 // first use. It only sets the value if one isn't already set, returning
 // false if publicKey already had a REAP user ID.

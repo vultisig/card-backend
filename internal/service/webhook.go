@@ -4,11 +4,17 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"log"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/vultisig/card-backend/internal/accountownership"
+	"github.com/vultisig/card-backend/internal/cardownership"
+	"github.com/vultisig/card-backend/internal/notification"
 	"github.com/vultisig/card-backend/internal/reap"
+	"github.com/vultisig/card-backend/internal/reapmapping"
 	"github.com/vultisig/card-backend/internal/reapwebhookevent"
 )
 
@@ -22,18 +28,19 @@ var (
 )
 
 // WebhookService backs POST /webhooks/reap, REAP's async event-delivery
-// callback (https://docs.reap.global/webhooks/overview). It only verifies
-// and persists events for later processing — it does not yet act on any
-// event type. The synchronous card-authorization-request webhook is a
-// separate REQUEST-mode mechanism REAP calls differently and isn't handled
-// here.
+// callback (https://docs.reap.global/webhooks/overview). It verifies and
+// persists every event, then best-effort pushes a client notification for
+// the vault the event concerns. The synchronous card-authorization-request
+// webhook is a separate REQUEST-mode mechanism REAP calls differently and
+// isn't handled here.
 type WebhookService struct {
-	pool   *pgxpool.Pool
-	secret string
+	pool         *pgxpool.Pool
+	secret       string
+	notification *notification.Client
 }
 
-func NewWebhookService(pool *pgxpool.Pool, secret string) *WebhookService {
-	return &WebhookService{pool: pool, secret: secret}
+func NewWebhookService(pool *pgxpool.Pool, secret string, notificationClient *notification.Client) *WebhookService {
+	return &WebhookService{pool: pool, secret: secret, notification: notificationClient}
 }
 
 // HandleEvent verifies rawBody against signatureHeader (the raw
@@ -48,12 +55,135 @@ func (s *WebhookService) HandleEvent(ctx context.Context, rawBody []byte, signat
 	}
 
 	var envelope struct {
-		ID   string `json:"id"`
-		Type string `json:"type"`
+		ID   string          `json:"id"`
+		Type string          `json:"type"`
+		Data json.RawMessage `json:"data"`
 	}
 	if err := json.Unmarshal(rawBody, &envelope); err != nil || envelope.ID == "" || envelope.Type == "" {
 		return ErrInvalidWebhookPayload
 	}
 
-	return reapwebhookevent.Record(ctx, s.pool, envelope.ID, envelope.Type, rawBody)
+	if err := reapwebhookevent.Record(ctx, s.pool, envelope.ID, envelope.Type, rawBody); err != nil {
+		return err
+	}
+
+	s.notifyVault(ctx, envelope.Type, envelope.Data)
+	return nil
+}
+
+// notifyVault best-effort pushes a client notification for the vault
+// affected by a REAP event. Resolution misses (unrecognized event shape, no
+// ownership record, no recorded chain code) and notification-service errors
+// are logged, not returned: the event is already durably recorded by the
+// time this runs, so a downstream notification hiccup must not fail
+// HandleEvent and trigger a REAP retry of an event we've already stored.
+func (s *WebhookService) notifyVault(ctx context.Context, eventType string, data json.RawMessage) {
+	publicKey, err := s.resolveVault(ctx, eventType, data)
+	if err != nil {
+		log.Printf("webhook: resolve vault for %s event: %v", eventType, err)
+		return
+	}
+	if publicKey == "" {
+		return
+	}
+
+	hexChainCode, err := reapmapping.GetHexChainCode(ctx, s.pool, publicKey)
+	if err != nil {
+		log.Printf("webhook: get chain code: %v", err)
+		return
+	}
+	if hexChainCode == "" {
+		return
+	}
+
+	err = s.notification.Notify(ctx, notification.Request{
+		VaultID: notification.VaultID(publicKey, hexChainCode),
+		Type:    "generic",
+		Title:   "Vultisig Card",
+		Body:    describeEvent(eventType),
+	})
+	if err != nil {
+		log.Printf("webhook: notify: %v", err)
+	}
+}
+
+// resolveVault maps a REAP webhook event to the vault it concerns, using
+// the same ownership tables the REST handlers check requests against.
+// Returns "" (no error) if the event type/shape isn't resolvable to a vault
+// yet, or if the resolved ID has no ownership record.
+func (s *WebhookService) resolveVault(ctx context.Context, eventType string, data json.RawMessage) (string, error) {
+	cardID, accountID, userID := eventSubjectIDs(eventType, data)
+	switch {
+	case cardID != "":
+		return cardownership.OwnerOf(ctx, s.pool, cardID)
+	case accountID != "":
+		return accountownership.OwnerOf(ctx, s.pool, accountID)
+	case userID != "":
+		return reapmapping.GetPublicKeyByReapUserID(ctx, s.pool, userID)
+	default:
+		return "", nil
+	}
+}
+
+// eventSubjectIDs extracts the id REAP's webhook data identifies its
+// subject by. Per REAP's docs, a webhook's data "match[es] the shape of the
+// corresponding API resource", so the field to key off of depends on the
+// event type:
+//   - card-scoped resources (transactions, fraud alerts, 3DS challenges)
+//     carry a cardId; shipments carry cards[].cardId; CARD_STATUS_UPDATED's
+//     data IS the card resource, keyed by its own id (same shape CardService
+//     reads — see internal/service/card.go)
+//   - ACCOUNT_STATUS_UPDATED's data is the account resource, keyed by id
+//   - USER_APPLICATION_STATUS_UPDATED's data is the user resource, keyed by
+//     id (REAP's user id, reverse-mapped to a vault via reapmapping)
+//
+// Returns exactly one of cardID/accountID/userID set, or all empty if
+// eventType/data don't resolve to any of the above.
+//
+// ponytail: COMPANY_STATUS_UPDATED, CARD_DISPUTE_STATUS_UPDATED, and the
+// CRYPTO_DEPOSIT_* events aren't resolved (no local ownership table for
+// company or dispute; deposits' accountId is only a guess and unverified
+// against a real payload) — add a case here once one exists.
+func eventSubjectIDs(eventType string, data json.RawMessage) (cardID, accountID, userID string) {
+	var payload struct {
+		ID        string `json:"id"`
+		CardID    string `json:"cardId"`
+		AccountID string `json:"accountId"`
+		Cards     []struct {
+			CardID string `json:"cardId"`
+		} `json:"cards"`
+	}
+	if err := json.Unmarshal(data, &payload); err != nil {
+		return "", "", ""
+	}
+
+	cardID = payload.CardID
+	if cardID == "" && len(payload.Cards) > 0 {
+		cardID = payload.Cards[0].CardID
+	}
+	if cardID == "" && eventType == "CARD_STATUS_UPDATED" {
+		cardID = payload.ID
+	}
+	if cardID != "" {
+		return cardID, "", ""
+	}
+
+	accountID = payload.AccountID
+	if accountID == "" && eventType == "ACCOUNT_STATUS_UPDATED" {
+		accountID = payload.ID
+	}
+	if accountID != "" {
+		return "", accountID, ""
+	}
+
+	if eventType == "USER_APPLICATION_STATUS_UPDATED" && payload.ID != "" {
+		return "", "", payload.ID
+	}
+	return "", "", ""
+}
+
+// describeEvent turns a REAP event type constant (e.g. "CARD_STATUS_UPDATED")
+// into a human-readable notification body ("card status updated").
+func describeEvent(eventType string) string {
+	return strings.ToLower(strings.ReplaceAll(eventType, "_", " "))
 }
