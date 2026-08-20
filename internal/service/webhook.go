@@ -47,8 +47,10 @@ func NewWebhookService(pool *pgxpool.Pool, secret string, notificationClient *no
 // X-Reap-Webhook-Signature header value) and, if valid, records the event
 // envelope (id/type/rawBody) via reapwebhookevent.Record, which is a no-op
 // if the event id was already recorded (REAP redelivers on non-2xx/timeout,
-// and may redeliver even after a successful ack). Returns
-// ErrInvalidWebhookSignature if verification fails.
+// and may redeliver even after a successful ack). The client notification
+// only fires on the first-time recording of an event id, so a redelivery
+// never double-notifies. Returns ErrInvalidWebhookSignature if verification
+// fails.
 func (s *WebhookService) HandleEvent(ctx context.Context, rawBody []byte, signatureHeader string) error {
 	if err := reap.VerifyWebhookSignature(s.secret, rawBody, signatureHeader, time.Now()); err != nil {
 		return err
@@ -63,8 +65,15 @@ func (s *WebhookService) HandleEvent(ctx context.Context, rawBody []byte, signat
 		return ErrInvalidWebhookPayload
 	}
 
-	if err := reapwebhookevent.Record(ctx, s.pool, envelope.ID, envelope.Type, rawBody); err != nil {
+	inserted, err := reapwebhookevent.Record(ctx, s.pool, envelope.ID, envelope.Type, rawBody)
+	if err != nil {
 		return err
+	}
+	if !inserted {
+		// Redelivery of an event we've already processed — REAP retries on
+		// non-2xx/timeout and may redeliver even after a successful ack, so
+		// notifying again here would double-push the same event.
+		return nil
 	}
 
 	s.notifyVault(ctx, envelope.Type, envelope.Data)
