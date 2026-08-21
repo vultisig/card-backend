@@ -27,10 +27,14 @@ CREATE TABLE IF NOT EXISTS vultisig_reap_mappings (
 	public_key_ecdsa TEXT NOT NULL UNIQUE,
 	reap_user_id TEXT UNIQUE,
 	nonce BIGINT NOT NULL DEFAULT 0,
+	reap_user_create_started_at TIMESTAMPTZ,
 	created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
 	updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
 	last_used_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+-- Added after the table shipped: CREATE TABLE IF NOT EXISTS above is a no-op on existing databases.
+ALTER TABLE vultisig_reap_mappings
+	ADD COLUMN IF NOT EXISTS reap_user_create_started_at TIMESTAMPTZ;
 ALTER TABLE vultisig_reap_mappings ADD COLUMN IF NOT EXISTS hex_chain_code TEXT;
 
 CREATE TABLE IF NOT EXISTS vultisig_card_ownership (
